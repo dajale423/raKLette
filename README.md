@@ -1,4 +1,4 @@
 # KL
 
-bayesian_linear_to_logistic.ipynb is the bayesian logistic model
+bayesian_linear_to_logistic.ipynb is the bayesian logistic model \n
 multinom_logistic.ipynb is the bayeisan multinomial logistic model
