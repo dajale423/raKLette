@@ -1,0 +1,89 @@
+import os
+import sys
+import glob
+import numpy as np
+import pandas as pd
+import math
+import sys
+import random
+import pickle
+import dask.dataframe as dd
+
+from dask.distributed import Client
+
+KL_data_dir = "/home/djl34/lab_pd/kl/data"
+scratch_dir = "/n/scratch3/users/d/djl34"
+
+base_set = ["A", "C", "T", "G"]
+chrom_set = [str(x) for x in range(1, 23)]
+# chrom_set = ["22"]
+
+
+rule all:
+    input:
+        [os.path.join(scratch_dir, "KL_input/intergenic_footprinting/" + chrom +"/_metadata") for chrom in chrom_set],
+        [os.path.join(scratch_dir, "KL_input/intergenic_footprinting/" + chrom +".tsv") for chrom in chrom_set],
+
+        
+########################### filter sites for KL analysis ###########################
+
+rule add_dnase_footprinting:
+    input:
+        os.path.join(KL_data_dir, "ukb_ac/{chrom}/_metadata")
+    output:
+        os.path.join(scratch_dir, "KL_input/intergenic_footprinting/{chrom}/_metadata")
+    run:
+        with Client() as client:
+            
+            rate = dd.read_parquet(KL_data_dir + "/" + "/".join(input[0].split("/")[6:-2]) + "/" + wildcards.chrom + "/part.*.parquet")
+            
+            print(rate.columns)
+            
+            columns_to_filter_for = ["intergenic"]
+            columns_of_interest = ["DHS_intensity", "footprint_intensity"]
+            
+            rate_intergenic = rate[rate["intergenic"].isna() == False]
+            rate_intergenic["type_name"] = "intergenic"
+            rate_intergenic["type"] = 0
+            
+            print(len(rate_intergenic))
+            
+            rate_DHS_only = rate_intergenic[(rate_intergenic[columns_of_interest[0]].isna() == False) & (rate_intergenic[columns_of_interest[1]].isna())]
+            rate_DHS_only["type_name"] = "DHS"
+            rate_DHS_only["type"] = 1
+            
+            print(len(rate_DHS_only))
+            
+            rate_footprinting_only = rate_intergenic[(rate_intergenic[columns_of_interest[1]].isna() == False) & (rate_intergenic[columns_of_interest[0]].isna())]
+            rate_footprinting_only["type_name"] = "footprinting"
+            rate_footprinting_only["type"] = 3
+            
+            print(len(rate_footprinting_only))
+            
+            include_columns = ["mu", "Freq_bin", "type", "type_name"] + columns_to_filter_for + columns_of_interest
+            
+            ddf = dd.concat([rate_intergenic[include_columns], rate_DHS_only[include_columns], rate_footprinting_only[include_columns]])
+            
+            print(len(ddf))
+            
+            ddf.to_parquet(scratch_dir + "/" + "/".join(output[0].split("/")[6:-2]) + "/" + wildcards.chrom , write_index = False, compression = "gzip", write_metadata_file = True)
+
+            
+rule intergenic_footprinting_tsv:
+    input:
+        os.path.join(scratch_dir, "KL_input/intergenic_footprinting/{chrom}/_metadata")
+    output:
+        os.path.join(scratch_dir, "KL_input/intergenic_footprinting/{chrom}.tsv")
+    run:
+        from dask.distributed import Client
+
+        with Client() as client:
+            
+            rate = dd.read_parquet("/".join(input[0].split("/")[:-2]) + "/" + wildcards.chrom + "/part.*.parquet")
+            
+            rate[["mu", "Freq_bin", "type"]].to_csv(output[0], sep = "\t", index = None, single_file = True)
+            
+            
+# ##################### For running KL analysis #############################
+        
+# rule run_KL
