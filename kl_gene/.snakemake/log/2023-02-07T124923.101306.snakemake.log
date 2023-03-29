@@ -1,0 +1,410 @@
+Building DAG of jobs...
+Using shell: /usr/bin/bash
+Provided cluster nodes: 22
+Job stats:
+job                       count    min threads    max threads
+----------------------  -------  -------------  -------------
+add_dnase_footprinting       22              1              1
+all                           1              1              1
+total                        23              1              1
+
+Select jobs to execute...
+
+[Tue Feb  7 12:49:24 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/5/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/5/_metadata
+    jobid: 5
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/5/_metadata
+    wildcards: chrom=5
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 5 with external jobid 'Submitted batch job 2753717'.
+
+[Tue Feb  7 12:49:25 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/20/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/20/_metadata
+    jobid: 20
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/20/_metadata
+    wildcards: chrom=20
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 20 with external jobid 'Submitted batch job 2753719'.
+
+[Tue Feb  7 12:49:25 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/13/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/13/_metadata
+    jobid: 13
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/13/_metadata
+    wildcards: chrom=13
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 13 with external jobid 'Submitted batch job 2753720'.
+
+[Tue Feb  7 12:49:25 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/6/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/6/_metadata
+    jobid: 6
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/6/_metadata
+    wildcards: chrom=6
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 6 with external jobid 'Submitted batch job 2753721'.
+
+[Tue Feb  7 12:49:25 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/21/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/21/_metadata
+    jobid: 21
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/21/_metadata
+    wildcards: chrom=21
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 21 with external jobid 'Submitted batch job 2753722'.
+
+[Tue Feb  7 12:49:25 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/14/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/14/_metadata
+    jobid: 14
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/14/_metadata
+    wildcards: chrom=14
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 14 with external jobid 'Submitted batch job 2753723'.
+
+[Tue Feb  7 12:49:25 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/7/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/7/_metadata
+    jobid: 7
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/7/_metadata
+    wildcards: chrom=7
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 7 with external jobid 'Submitted batch job 2753724'.
+
+[Tue Feb  7 12:49:25 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/22/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/22/_metadata
+    jobid: 22
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/22/_metadata
+    wildcards: chrom=22
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 22 with external jobid 'Submitted batch job 2753726'.
+
+[Tue Feb  7 12:49:25 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/15/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/15/_metadata
+    jobid: 15
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/15/_metadata
+    wildcards: chrom=15
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 15 with external jobid 'Submitted batch job 2753727'.
+
+[Tue Feb  7 12:49:25 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/8/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/8/_metadata
+    jobid: 8
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/8/_metadata
+    wildcards: chrom=8
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 8 with external jobid 'Submitted batch job 2753728'.
+
+[Tue Feb  7 12:49:26 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/16/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/16/_metadata
+    jobid: 16
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/16/_metadata
+    wildcards: chrom=16
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 16 with external jobid 'Submitted batch job 2753729'.
+
+[Tue Feb  7 12:49:26 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/1/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/1/_metadata
+    jobid: 1
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/1/_metadata
+    wildcards: chrom=1
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 1 with external jobid 'Submitted batch job 2753731'.
+
+[Tue Feb  7 12:49:26 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/9/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/9/_metadata
+    jobid: 9
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/9/_metadata
+    wildcards: chrom=9
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 9 with external jobid 'Submitted batch job 2753732'.
+
+[Tue Feb  7 12:49:26 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/17/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/17/_metadata
+    jobid: 17
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/17/_metadata
+    wildcards: chrom=17
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 17 with external jobid 'Submitted batch job 2753733'.
+
+[Tue Feb  7 12:49:26 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/2/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/2/_metadata
+    jobid: 2
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/2/_metadata
+    wildcards: chrom=2
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 2 with external jobid 'Submitted batch job 2753734'.
+
+[Tue Feb  7 12:49:26 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/10/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/10/_metadata
+    jobid: 10
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/10/_metadata
+    wildcards: chrom=10
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 10 with external jobid 'Submitted batch job 2753735'.
+
+[Tue Feb  7 12:49:27 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/18/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/18/_metadata
+    jobid: 18
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/18/_metadata
+    wildcards: chrom=18
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 18 with external jobid 'Submitted batch job 2753737'.
+
+[Tue Feb  7 12:49:27 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/3/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/3/_metadata
+    jobid: 3
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/3/_metadata
+    wildcards: chrom=3
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 3 with external jobid 'Submitted batch job 2753738'.
+
+[Tue Feb  7 12:49:27 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/11/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/11/_metadata
+    jobid: 11
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/11/_metadata
+    wildcards: chrom=11
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 11 with external jobid 'Submitted batch job 2753739'.
+
+[Tue Feb  7 12:49:27 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/19/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/19/_metadata
+    jobid: 19
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/19/_metadata
+    wildcards: chrom=19
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 19 with external jobid 'Submitted batch job 2753740'.
+
+[Tue Feb  7 12:49:27 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/4/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/4/_metadata
+    jobid: 4
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/4/_metadata
+    wildcards: chrom=4
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 4 with external jobid 'Submitted batch job 2753741'.
+
+[Tue Feb  7 12:49:27 2023]
+rule add_dnase_footprinting:
+    input: /home/djl34/lab_pd/kl/data/ukb_ac/12/_metadata
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/12/_metadata
+    jobid: 12
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/12/_metadata
+    wildcards: chrom=12
+    resources: mem_mb=1000, disk_mb=1000, tmpdir=/tmp
+
+Submitted job 12 with external jobid 'Submitted batch job 2753742'.
+[Tue Feb  7 12:50:34 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 5
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/5/_metadata
+    cluster_jobid: Submitted batch job 2753717
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 5, external: Submitted batch job 2753717, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.5.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:50:34 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 20
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/20/_metadata
+    cluster_jobid: Submitted batch job 2753719
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 20, external: Submitted batch job 2753719, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.20.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:50:34 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 13
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/13/_metadata
+    cluster_jobid: Submitted batch job 2753720
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 13, external: Submitted batch job 2753720, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.13.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:32 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 6
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/6/_metadata
+    cluster_jobid: Submitted batch job 2753721
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 6, external: Submitted batch job 2753721, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.6.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:32 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 21
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/21/_metadata
+    cluster_jobid: Submitted batch job 2753722
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 21, external: Submitted batch job 2753722, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.21.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:32 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 14
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/14/_metadata
+    cluster_jobid: Submitted batch job 2753723
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 14, external: Submitted batch job 2753723, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.14.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:32 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 7
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/7/_metadata
+    cluster_jobid: Submitted batch job 2753724
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 7, external: Submitted batch job 2753724, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.7.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:32 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 22
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/22/_metadata
+    cluster_jobid: Submitted batch job 2753726
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 22, external: Submitted batch job 2753726, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.22.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:32 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 15
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/15/_metadata
+    cluster_jobid: Submitted batch job 2753727
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 15, external: Submitted batch job 2753727, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.15.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:32 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 8
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/8/_metadata
+    cluster_jobid: Submitted batch job 2753728
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 8, external: Submitted batch job 2753728, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.8.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:32 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 16
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/16/_metadata
+    cluster_jobid: Submitted batch job 2753729
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 16, external: Submitted batch job 2753729, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.16.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:32 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 1
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/1/_metadata
+    cluster_jobid: Submitted batch job 2753731
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 1, external: Submitted batch job 2753731, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.1.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:32 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 9
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/9/_metadata
+    cluster_jobid: Submitted batch job 2753732
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 9, external: Submitted batch job 2753732, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.9.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:33 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 17
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/17/_metadata
+    cluster_jobid: Submitted batch job 2753733
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 17, external: Submitted batch job 2753733, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.17.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:33 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 2
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/2/_metadata
+    cluster_jobid: Submitted batch job 2753734
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 2, external: Submitted batch job 2753734, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.2.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:33 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 10
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/10/_metadata
+    cluster_jobid: Submitted batch job 2753735
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 10, external: Submitted batch job 2753735, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.10.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:33 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 18
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/18/_metadata
+    cluster_jobid: Submitted batch job 2753737
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 18, external: Submitted batch job 2753737, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.18.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:33 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 3
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/3/_metadata
+    cluster_jobid: Submitted batch job 2753738
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 3, external: Submitted batch job 2753738, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.3.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:33 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 11
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/11/_metadata
+    cluster_jobid: Submitted batch job 2753739
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 11, external: Submitted batch job 2753739, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.11.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:33 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 19
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/19/_metadata
+    cluster_jobid: Submitted batch job 2753740
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 19, external: Submitted batch job 2753740, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.19.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:33 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 4
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/4/_metadata
+    cluster_jobid: Submitted batch job 2753741
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 4, external: Submitted batch job 2753741, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.4.sh). For error details see the cluster log and the log files of the involved rule(s).
+[Tue Feb  7 12:53:33 2023]
+Error in rule add_dnase_footprinting:
+    jobid: 12
+    output: /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/12/_metadata
+    cluster_jobid: Submitted batch job 2753742
+
+Error executing rule add_dnase_footprinting on cluster (jobid: 12, external: Submitted batch job 2753742, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.p57p715t/snakejob.add_dnase_footprinting.12.sh). For error details see the cluster log and the log files of the involved rule(s).
+Shutting down, this might take some time.
+Exiting because a job execution failed. Look above for error message
+Complete log: .snakemake/log/2023-02-07T124923.101306.snakemake.log

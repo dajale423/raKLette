@@ -1,0 +1,5 @@
+Building DAG of jobs...
+MissingInputException in rule all in line 48 of /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/Snakefile:
+Missing input files for rule all:
+    affected files:
+        /home/djl34/lab_pd/kl/data/raklette_output/kl_gene/enhancer_module/all.tsv

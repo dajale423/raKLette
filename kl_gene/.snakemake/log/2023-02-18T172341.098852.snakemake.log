@@ -1,0 +1,21 @@
+Building DAG of jobs...
+Using shell: /usr/bin/bash
+Provided cluster nodes: 1
+Job stats:
+job                count    min threads    max threads
+---------------  -------  -------------  -------------
+all                    1              1              1
+merge_tsv_files        1              1              1
+total                  2              1              1
+
+Select jobs to execute...
+
+[Sat Feb 18 17:23:43 2023]
+rule merge_tsv_files:
+    input: /n/scratch3/users/d/djl34/KL_input/enhancer_module/1.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/2.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/3.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/4.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/5.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/6.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/7.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/8.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/9.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/10.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/11.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/12.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/13.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/14.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/15.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/16.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/17.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/18.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/19.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/20.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/21.tsv, /n/scratch3/users/d/djl34/KL_input/enhancer_module/22.tsv
+    output: /n/scratch3/users/d/djl34/KL_input/enhancer_module/combined.tsv
+    jobid: 23
+    reason: Missing output files: /n/scratch3/users/d/djl34/KL_input/enhancer_module/combined.tsv
+    resources: mem_mb=129342, disk_mb=129342, tmpdir=/tmp
+
+Submitted job 23 with external jobid 'Submitted batch job 3371429'.

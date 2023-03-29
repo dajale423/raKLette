@@ -1,0 +1,5 @@
+Building DAG of jobs...
+MissingInputException in rule all in line 22 of /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/Snakefile:
+Missing input files for rule all:
+    affected files:
+        /n/scratch3/users/d/djl34/KL_input/intergenic_footprinting/22/_metadata

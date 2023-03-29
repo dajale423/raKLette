@@ -1,0 +1,31 @@
+Building DAG of jobs...
+Using shell: /usr/bin/bash
+Provided cluster nodes: 1
+Job stats:
+job                       count    min threads    max threads
+----------------------  -------  -------------  -------------
+all                           1              1              1
+run_KL_enhancer_module        1              1              1
+total                         2              1              1
+
+Select jobs to execute...
+
+[Mon Mar 27 12:11:45 2023]
+rule run_KL_enhancer_module:
+    input: /n/scratch3/users/d/djl34/kl_input/enhancer_module/gene.tsv, /home/djl34/lab_pd/kl/data/neutral_SFS_5bins.tsv
+    output: /home/djl34/lab_pd/kl/data/raklette_output/kl_gene/enhancer_module/all_noncoding.tsv
+    jobid: 326
+    reason: Missing output files: /home/djl34/lab_pd/kl/data/raklette_output/kl_gene/enhancer_module/all_noncoding.tsv
+    resources: mem_mb=103980, disk_mb=103980, tmpdir=/tmp
+
+Submitted job 326 with external jobid 'Submitted batch job 5711848'.
+[Mon Mar 27 12:30:25 2023]
+Error in rule run_KL_enhancer_module:
+    jobid: 326
+    output: /home/djl34/lab_pd/kl/data/raklette_output/kl_gene/enhancer_module/all_noncoding.tsv
+    cluster_jobid: Submitted batch job 5711848
+
+Error executing rule run_KL_enhancer_module on cluster (jobid: 326, external: Submitted batch job 5711848, jobscript: /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/.snakemake/tmp.a0fzruzu/snakejob.run_KL_enhancer_module.326.sh). For error details see the cluster log and the log files of the involved rule(s).
+Shutting down, this might take some time.
+Exiting because a job execution failed. Look above for error message
+Complete log: .snakemake/log/2023-03-27T121138.605108.snakemake.log

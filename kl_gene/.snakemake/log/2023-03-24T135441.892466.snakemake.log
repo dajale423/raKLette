@@ -1,0 +1,3 @@
+CreateRuleExceptionin line 90 of /n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/Snakefile:
+The name merge_tsv_files is already used by another rule
+  File "/n/data2/hms/dbmi/sunyaev/lab/dlee/kl/git/KL/noncoding_analysis/kl_gene/Snakefile", line 90, in <module>
