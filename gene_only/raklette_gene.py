@@ -17,6 +17,8 @@ import raklette_updated
 import dask.dataframe as dd
 from dask.distributed import Client
 
+import pickle
+
 KL_data_dir = "/home/djl34/lab_pd/kl/data"
 
 ########################################################################################################
@@ -29,7 +31,7 @@ class TSVDataset(Dataset):
         self.len = nb_samples // self.chunksize
         self.header = header_all
         self.features = features
-        
+
     def __getitem__(self, index):
         x = next(
             pd.read_csv(
@@ -38,20 +40,20 @@ class TSVDataset(Dataset):
                 skiprows=index * self.chunksize + 1,  #+1, since we skip the header
                 chunksize=self.chunksize,
                 names=self.header))
-        
+
         x = x[self.features]
-        x["e_module"] = x["e_module"] + 1
         x = torch.from_numpy(x.values)
         return x
 
     def __len__(self):
         return self.len
     
+    
 ########################################################################################################
 # Main Function
 ########################################################################################################
 def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, output_filename):
-    
+        
     print("running raklette")
     
     # read neutral sfs
@@ -72,12 +74,10 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
     #run inference
     pyro.clear_param_store()
     # run SVI
-    adam = pyro.optim.Adam({"lr":0.005})
+    optimizer = pyro.optim.Adam({"lr":0.005})
     elbo = pyro.infer.Trace_ELBO(num_particles=1, vectorize_particles=True)
-    svi = pyro.infer.SVI(model, guide, adam, elbo)
+    svi = pyro.infer.SVI(model, guide, optimizer, elbo)
     losses = []
-
-#     num_epochs = 1
 
     for epoch in range(num_epochs):
         # Take a gradient step for each mini-batch in the dataset
@@ -89,10 +89,17 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
             mu_vals = mu_vals.type(torch.LongTensor)
 
             loss = svi.step(mu_vals, gene_ids, None, data[:,:,1].reshape(-1))
-    #         if y is not None:
-    #             y = y.type_as(x)
-    #         loss = svi.step(x, y)
+
             losses.append(loss)
+        
+            if batch_idx % 10 == 0:
+                print(batch_idx)
+                print(loss)
+                
+    model_filename = ".".join(output_filename.split(".")[:-1]) + ".save"
+    
+    #save model parameters
+    pyro.get_param_store().save(model_filename)    
 
     #     # Tell the scheduler we've done one epoch.
     #     scheduler.step()
@@ -101,13 +108,9 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
 
     print("Finished training!")
 
-    # for step in tqdm(range(n_steps)): # tqdm is just a progress bar thing 
-    #     loss = svi.step(mu_vals, gene_ids, None, sample_sfs)
-    #     print(loss)
-    #     losses.append(loss)
-
     ##############################post inference##############################
     
-    result = raklette_updated.post_analysis(neutral_sfs)
+    result = raklette_updated.post_analysis(sfs, guide, n_covs, losses)
 
-    result.to_csv(output_filename, sep = "\t")
+    with open(output_filename, 'wb') as f:
+        pickle.dump(result, f)

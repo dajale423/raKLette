@@ -34,7 +34,6 @@ base_set = ["A", "C", "T", "G"]
 chrom_set = [str(x) for x in range(1, 23)]
 # chrom_set = ["22"]
 
-
 gene_set_file = os.path.join(scratch_dir, "kl_input/enhancer_module/unique_gene.tsv")
 
 if os.path.isfile(gene_set_file):
@@ -43,21 +42,24 @@ if os.path.isfile(gene_set_file):
 else:
     gene_set = []
     
-# gene_set = [0]
+gene_positive_set = [x for x in gene_set if int(x) > 0]
 
 rule all:
     input:
 #         [os.path.join(scratch_dir, "kl_input/enhancer_module/" + chrom +".tsv") for chrom in chrom_set],
 #         os.path.join(scratch_dir, "kl_input/enhancer_module/unique_gene.tsv"),
 #         gene_set_file,
-#         [os.path.join(scratch_dir, "kl_input/enhancer_module/divided/gene_" + str(gene) +".tsv") for gene in gene_set],
-#         os.path.join(scratch_dir, "kl_input/enhancer_module/whole_genome_variants.tsv"),
-#         os.path.join(scratch_dir, "kl_input/enhancer_module/length.txt"),
-        os.path.join(KL_data_dir, "raklette_output/kl_gene/enhancer_module/22.tsv")
+        [os.path.join(scratch_dir, "kl_input/enhancer_module/divided/gene_" + str(gene) +".tsv") for gene in gene_positive_set],
+        os.path.join(scratch_dir, "kl_input/enhancer_module/whole_genome_gene_variants.tsv"),
+        os.path.join(scratch_dir, "kl_input/enhancer_module/whole_genome_gene_variants_frac_0.01.tsv"),
+#         os.path.join(scratch_dir, "kl_input/enhancer_module/whole_genome_gene_variants_frac_0.05.tsv"),
+#         os.path.join(scratch_dir, "kl_input/enhancer_module/whole_genome_gene_variants_length.txt"),
+        os.path.join(KL_data_dir, "raklette_output/kl_gene/enhancer_module/whole_genome_gene_variants_1000000_epoch_10.pkl"),
+#         os.path.join(KL_data_dir, "raklette_output/kl_gene/enhancer_module/whole_genome_gene_variants_frac_0.01_epoch_1.pkl")
 #         os.path.join(KL_data_dir, "raklette_output/kl_gene/enhancer_module/all_noncoding.tsv")
 
         
-########################### filter sites for KL analysis ###########################
+###################################### filter sites for KL analysis ######################################
 
 rule make_tsv_files:
     input:
@@ -72,10 +74,10 @@ rule make_tsv_files:
             print(rate.columns)
             
             rate = rate[rate["coding"] == False]
-             
+            
             rate["e_module"] = rate["e_module"].fillna(-1)
             rate["e_module"] = rate["e_module"].astype(int)
-            rate["e_module"] = rate["e_module"] - rate["e_module"].min() # set everything to 0
+#             rate["e_module"] = rate["e_module"] - rate["e_module"].min() # set everything to 0
             rate["gene"] = rate["e_module"]
             
             include_columns = ["mu_index", "Freq_bin", "gene"]
@@ -109,12 +111,13 @@ rule get_unique_genes:
         
 rule divide_by_gene_tsv_files:
     input:
-        [os.path.join(scratch_dir, "kl_input/enhancer_module/" + chrom +".tsv") for chrom in chrom_set]
+        file_list = [os.path.join(scratch_dir, "kl_input/enhancer_module/" + chrom +".tsv") for chrom in chrom_set]
     output:
         os.path.join(scratch_dir, "kl_input/enhancer_module/divided/gene_{gene}.tsv")
     run:
         with Client() as client:
-            rate = dd.read_csv(input[0], sep = "\t", dtype={'gene': 'int'})
+            print(input.file_list)
+            rate = dd.read_csv(input.file_list, sep = "\t", dtype={'gene': 'int'})
             
             rate_gene = rate[rate["gene"] == int(wildcards.gene)]
             
@@ -122,64 +125,87 @@ rule divide_by_gene_tsv_files:
             
 rule merge_tsv_files:
     input:
-        [os.path.join(scratch_dir, "kl_input/enhancer_module/divided/gene_" + str(gene) +".tsv") for gene in gene_set]
+        file_list = [os.path.join(scratch_dir, "kl_input/enhancer_module/divided/gene_" + str(gene) +".tsv") for gene in gene_positive_set]
     output:
-        os.path.join(scratch_dir, "kl_input/enhancer_module/whole_genome_variants.tsv")
+        os.path.join(scratch_dir, "kl_input/enhancer_module/whole_genome_gene_variants.tsv")
     run:
         with Client() as client:
-            rate = dd.read_csv([os.path.join(scratch_dir, "kl_input/enhancer_module/divided/gene_" + str(gene) +".tsv") for gene in gene_set], sep = "\t", dtype={'gene': 'int'})
+            rate = dd.read_csv(input.file_list, sep = "\t", dtype={'gene': 'int'})
+            
+            min_value = rate["gene"].min()
+            print(min_value)
+            
+            rate["gene"] = rate["gene"] - min_value # set everything to 0
             
             rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
             
+rule random_sample:
+    input:
+        os.path.join(scratch_dir, "kl_input/enhancer_module/whole_genome_gene_variants.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/enhancer_module/whole_genome_gene_variants_frac_{fraction}.tsv")
+    run:
+        with Client() as client:
+            rate = dd.read_csv(input[0], sep = "\t", dtype={'mu_index': 'int', 'Freq_bin': 'float', 'gene': 'int'})
+            
+            sample = rate.sample(frac = float(wildcards.fraction))
+            
+            sample = sample.sort_values(by = "gene")
+                        
+            sample.to_csv(output[0], sep = "\t", index = None, single_file = True)
+            
 rule get_length:
     input:
-        os.path.join(scratch_dir, "kl_input/enhancer_module/whole_genome_variants.tsv")
+        os.path.join(scratch_dir, "kl_input/enhancer_module/{header}.tsv")
     output:
-        os.path.join(scratch_dir, "kl_input/enhancer_module/length.txt")
+        os.path.join(scratch_dir, "kl_input/enhancer_module/{header}_length.txt")
     run:
         with Client() as client:
             rate = dd.read_csv(input[0], sep = "\t", dtype={'gene': 'int'})
             
             length = len(rate)
+            n_genes = len(rate["gene"].unique())
             
             f = open(output[0], "w")
             
             f.write(str(length) + "\n")
+            f.write(str(n_genes) + "\n")
             
             f.close()
-
                 
 # ##################### For running KL analysis #############################
         
 rule run_KL_enhancer_module:
     input:
         variants = os.path.join(scratch_dir, "kl_input/enhancer_module/{header}.tsv"),
+        length_file = os.path.join(scratch_dir, "kl_input/enhancer_module/{header}_length.txt"),
         neutral_sfs = KL_data_dir + "/neutral_SFS_5bins.tsv"
     output:
-        os.path.join(KL_data_dir, "raklette_output/kl_gene/enhancer_module/{header}.tsv")
+        os.path.join(KL_data_dir, "raklette_output/kl_gene/enhancer_module/{header}_epoch_{epoch}.pkl")
     run:            
         input_filename = input.variants
         output_filename = output[0]
         neutral_sfs_filename = input.neutral_sfs
         
-        with Client() as client:
-            df = dd.read_csv(input_filename, sep = "\t")
-            nb_samples = len(df)
-            header = df.columns
-            n_genes = len(df["e_module"].unique()) + 1
-            del df
-            print("done reading")
+        df = pd.read_csv(input.length_file, sep = "\t", header = None)
+        nb_samples = df[0][0]
+        n_genes = df[0][1]
+        
+        with open(input.variants) as f:
+            first_line = f.readline()
+        header = first_line.split("\t")
             
         chunksize = 100000
-        dataset = TSVDataset(input_filename, chunksize=chunksize, nb_samples = nb_samples, header_all = header, features = header)
-        
+
         print("number of chunks " + str(nb_samples/chunksize))
 
+        dataset = TSVDataset(input_filename, chunksize=chunksize, nb_samples = nb_samples, header_all = header, features = header)
         loader = DataLoader(dataset, batch_size=10, num_workers=1, shuffle=False)
         
         n_covs = 0
-        num_epochs = 1
+        num_epochs = int(wildcards.epoch)
         
+        #now with checkpoints
         run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, output_filename)
         
         
