@@ -1,4 +1,4 @@
 # KL
 
-bayesian_linear_to_logistic.ipynb is the bayesian logistic model\
-multinom_logistic.ipynb is the bayeisan multinomial logistic model
+run_raklette.py uses function from raklette_updated.py
+Snakefile in the files runs the run_raklette (check rules starting with "run_KL")
