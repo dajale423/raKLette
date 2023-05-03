@@ -47,6 +47,7 @@ def KL_fw(neut_probs, sel_probs):
 def KL_rv(neut_probs, sel_probs):
     return np.sum(sel_probs * (np.log(sel_probs) - np.log(neut_probs)), axis=-1)
 
+
 ## Model fitting
 ####################################################
 def plot_losses(losses):
@@ -108,8 +109,8 @@ class raklette():
                  n_mix=2, cov_sigma_prior=torch.tensor(0.1, dtype=torch.float32), ref_mu_ii=-1,
                  trans="abs", pdist="t"):
         
-        mu = torch.unique(mu_vals)             # set of all possible mutation rates
-        n_mu = len(mu)                         # number of unique mutation rates
+#         mu = torch.unique(mu_vals)             # set of all possible mutation rates
+#         n_mu = len(mu)                         # number of unique mutation rates
         
         beta_neut_full = multinomial_trans_torch(neut_sfs_full) #neut_sfs_full is the neutral sfs
         beta_neut = beta_neut_full[ref_mu_ii,:]
@@ -181,8 +182,8 @@ class raklette():
                   beta_trans[...,None,:] -
                   mu_adj)
         # convert to probabilities per-site and adjust for covariates
-        if self.n_covs > 0:
-            sfs = softmax(pad(mn_sfs[..., gene_ids, mu_vals, :] - torch.matmul(covariates, torch.cumsum(beta_cov, -1))))
+        if self.n_covs > 0:            
+            sfs = softmax(pad(mn_sfs[..., gene_ids, mu_vals, :] - covariates * torch.cumsum(beta_cov, -1)))
         else:
             sfs = softmax(pad(mn_sfs[..., gene_ids, mu_vals, :]))
 
@@ -190,7 +191,16 @@ class raklette():
             pyro.sample("obs", dist.Categorical(sfs), obs=sample_sfs)
 
             
-def post_analysis(neut_sfs_full, ref_mu_ii = -1, pdist = "t", trans = "abs", post_samps=10000):
+def post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, ref_mu_ii = -1, pdist = "t", trans = "abs", post_samps=10000):
+    
+#     bin_columns = []
+#     for i in range(5):
+#         bin_columns.append(str(i) + "_bin")
+#     neutral_sfs = torch.tensor(sfs[bin_columns].values)
+#     mu_ref = torch.tensor(sfs["mu"].values)
+#     n_bins = len(neutral_sfs[1]) - 1
+    
+    neut_sfs_full = neutral_sfs
     
     beta_neut_full = multinomial_trans_torch(neut_sfs_full) #neut_sfs_full is the neutral sfs
     # grab gene-DFE prior parameter point estimates
@@ -258,6 +268,9 @@ def post_analysis(neut_sfs_full, ref_mu_ii = -1, pdist = "t", trans = "abs", pos
     if n_covs > 0:
         result["post_beta_cov"] = torch.cumsum(post_samples['beta_cov'], -1)
     result["losses"] = losses
+    
+    fig, ax = plot_losses(losses)
+    
     result["fig"] = (fig, ax)
     
     return result

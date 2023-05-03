@@ -1,0 +1,188 @@
+import os
+import sys
+import glob
+import numpy as np
+import pandas as pd
+import math
+import sys
+import random
+import pickle
+
+import dask.dataframe as dd
+from dask.distributed import Client
+
+import torch
+import pyro
+import pyro.distributions as dist
+import pyro.distributions.constraints as constraints
+from pyro.nn import PyroModule
+
+from tqdm import tqdm
+from torch.utils.data import Dataset, DataLoader
+
+sys.path.insert(0, '/home/djl34/lab_pd/kl/git/KL')
+import raklette_updated
+from run_raklette import run_raklette
+from run_raklette import TSVDataset
+
+##############################################################################################################
+
+KL_data_dir = "/home/djl34/lab_pd/kl/data"
+scratch_dir = "/n/scratch3/users/d/djl34"
+
+base_set = ["A", "C", "T", "G"]
+chrom_set = [str(x) for x in range(1, 23)]
+# chrom_set = ["22"]
+
+wildcard_constraints:
+    chrom="\d+"
+    
+file_directory = "window_1k"
+
+###################################################################################################################
+
+file_names = glob.glob("/home/djl34/scratch/kl_input/window_1k/*1_split*.tsv")
+
+file_names = [x.split("/")[-1] for x in file_names]
+file_names = [x.split(".")[0] for x in file_names]
+
+###################################################################################################################
+
+rule all:
+    input:
+        [os.path.join(scratch_dir, "kl_input/"+ file_directory + "/" + chrom +".tsv") for chrom in chrom_set],
+        [os.path.join(scratch_dir, "kl_input/"+ file_directory + "/" + chrom +"_split_5k_0.tsv") for chrom in chrom_set],
+        [os.path.join(scratch_dir, "kl_input/"+ file_directory + "/" + header + "_length.txt") for header in file_names],
+        [os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + header +"_lr_0.001_epoch_3000.pkl") for header in file_names]
+
+        
+###################################### filter sites for KL analysis ######################################
+
+rule make_tsv_files:
+    input:
+        os.path.join(scratch_dir, "whole_genome/exon/{chrom}/_metadata")
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "/{chrom}.tsv")
+    run:
+        with Client() as client:
+            
+            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+            
+            print(rate.columns)
+                        
+            include_columns = ["mu_index", "Freq_bin","window_1k"]
+            
+            rate = rate[include_columns]
+            
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+
+# rule sort:
+#     input:
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "/{chrom}.tsv")
+#     output:
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "/{chrom}_sorted.tsv")
+#     run:
+#         with Client() as client:
+            
+#             rate = dd.read_csv(input[0], sep = "\t")
+            
+#             rate = rate.sort_values('window_1k')  
+            
+#             rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+            
+rule split_into_5k_genes:
+    input:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "/{chrom}.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "/{chrom}_split_5k_0.tsv")
+    run:
+        with Client() as client:
+            
+            rate = dd.read_csv(input[0], sep = "\t")
+            
+            maximum = rate["window_1k"].max().compute()
+            
+            max_iterator = int(maximum / split_by)
+            
+            print(str(maximum))
+            
+            for i in range(max_iterator + 1):
+                rate_filtered = rate[(rate["window_1k"] < (i + 1) * split_by) & (rate["window_1k"] >= i * split_by)]
+                
+                rate_filtered = rate_filtered.compute()
+                
+                rate_filtered = rate_filtered.sort_values('window_1k')
+                
+                unique_list =list(rate_filtered["window_1k"].unique())
+
+                unique_list.sort()
+    
+                rate_filtered["gene"] = [unique_list.index(x) for x in rate_filtered['window_1k']]
+        
+                rate_filtered[["mu_index", "Freq_bin", "gene", "window_1k"]].to_csv(os.path.join(scratch_dir, "kl_input/" + file_directory + "/" + wildcards.chrom +"_split_5k_" + str(i) + ".tsv"), sep = "\t", index = None)
+
+############################################# make site with no genes ##############################################          
+rule get_length:
+    input:
+        os.path.join(scratch_dir, "kl_input/{header}.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/{header}_length.txt")
+    run:
+        with Client() as client:
+            rate = dd.read_csv(input[0], sep = "\t")
+            
+            length = len(rate)
+            n_genes = len(rate["gene"].unique())
+            
+            f = open(output[0], "w")
+            
+            f.write(str(length) + "\n")
+            f.write(str(n_genes) + "\n")
+            
+            f.close()
+                
+# ##################### For running KL analysis #############################
+        
+rule run_KL_enhancer_module:
+    input:
+        variants = os.path.join(scratch_dir, "kl_input/{header}.tsv"),
+        length_file = os.path.join(scratch_dir, "kl_input/{header}_length.txt"),
+        neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all.tsv"
+    output:
+        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/{header}_lr_{learning_rate}_epoch_{epoch}.pkl")
+    run:
+        n_covs = 0
+        
+        input_filename = input.variants
+        output_filename = output[0]
+        neutral_sfs_filename = input.neutral_sfs
+        
+        df = pd.read_csv(input.length_file, sep = "\t", header = None)
+        nb_samples = df[0][0]
+        n_genes = df[0][1]
+        
+        print("number of samples: " + str(nb_samples))
+        print("number of genes: " + str(n_genes))
+        
+        with open(input.variants) as f:
+            first_line = f.readline()
+        header = first_line.split("\t")
+            
+        chunksize = 1000000
+        
+        if nb_samples < chunksize:
+            chunksize = nb_samples
+
+        print("number of chunks " + str(nb_samples/chunksize))
+
+        dataset = TSVDataset(input_filename, chunksize=chunksize, nb_samples = nb_samples, header_all = header, features = header)
+        loader = DataLoader(dataset, batch_size=1, num_workers=1, shuffle=False)
+        
+        num_epochs = int(wildcards.epoch)
+        
+        #now with checkpoints
+        run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, output_filename, float(wildcards.learning_rate))
+        
+        
+            
+        
