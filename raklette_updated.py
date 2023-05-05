@@ -22,7 +22,7 @@ import matplotlib
 ####################################################
 pad = torch.nn.ConstantPad1d((1,0), 0.)            # Add a 0 to a tensor
 softmax = torch.nn.Softmax(-1)                     # softmax transform along the last dimension
-relu = torch.nn.ReLU()                             # map everything < 0 -> 0 
+relu = torch.nn.ReLU()                             # map everything < 0 -> 0
 order_trans = dist.transforms.OrderedTransform()   # y_0=x_0; y_i=y_0+sum_j=1^i exp(x_j) [not really used anymore, weird properties]
 ####################################################
 
@@ -108,27 +108,43 @@ class raklette():
     def __init__(self, neut_sfs_full, n_bins, mu_ref, n_covs, n_genes,
                  n_mix=2, cov_sigma_prior=torch.tensor(0.1, dtype=torch.float32), ref_mu_ii=-1,
                  trans="abs", pdist="t"):
-        
+
 #         mu = torch.unique(mu_vals)             # set of all possible mutation rates
 #         n_mu = len(mu)                         # number of unique mutation rates
-        
+
         beta_neut_full = multinomial_trans_torch(neut_sfs_full) #neut_sfs_full is the neutral sfs
         beta_neut = beta_neut_full[ref_mu_ii,:]
         self.beta_neut = beta_neut
-        
-        self.n_bins = n_bins        
+
+        self.n_bins = n_bins
         self.mu_ref = mu_ref
         self.n_covs = n_covs
         self.n_genes = n_genes
-        
+
         self.n_mix = n_mix
         self.cov_sigma_prior = cov_sigma_prior
         self.trans = trans
         self.pdist = pdist
-        
+
     def model(self, mu_vals, gene_ids, covariates = None, sample_sfs=None):
+        '''
+        Run the model for a given dataset, defined by mutation rates, gene_ids, and other covariates
+
+        Parameters
+        ----------
+        mu_vals :
+            The mutation rate for each site being analyzed by the model as a 1D array, proportional to per-generation ideally
+        gene_ids :
+            The gene id for each site being analyzed, categorical variable, give as integers
+        covariates :
+            Matrix of covariates
+        sample_sfs :
+            The observed binned SFS data we are fitting the model to
+
+        '''
+
         n_sites = len(mu_vals)
-        
+
         ## Setup flexible prior
         # parameters describing the prior over genes are set as pyro.param, meaning they will get point estimates (no posterior)
         if self.pdist=="t":
@@ -136,7 +152,7 @@ class raklette():
             # uses a fixed "point mass" at zero as one of the mixtures, not sure if this should be kept
             beta_prior_mean = pyro.param("beta_prior_mean", torch.randn((self.n_mix-1,self.n_bins)),
                                          constraint=constraints.real)
-            beta_prior_L = pyro.param("beta_prior_L", torch.linalg.cholesky(0.01*torch.diag(torch.ones(self.n_bins, dtype=torch.float32))).expand(self.n_mix-1, self.n_bins, self.n_bins), 
+            beta_prior_L = pyro.param("beta_prior_L", torch.linalg.cholesky(0.01*torch.diag(torch.ones(self.n_bins, dtype=torch.float32))).expand(self.n_mix-1, self.n_bins, self.n_bins),
                                                                             constraint=constraints.lower_cholesky)
             beta_prior_df = pyro.param("beta_prior_df", torch.tensor([10]*(self.n_mix-1), dtype=torch.float32), constraint=constraints.positive)
             mix_probs = pyro.param("mix_probs", torch.ones(self.n_mix, dtype=torch.float32)/self.n_mix, constraint=constraints.simplex)
@@ -148,7 +164,7 @@ class raklette():
 
         # interaction term bewteen gene-based selection and mutation rate
         beta_prior_b = pyro.param("beta_prior_b", torch.tensor([0.001]*self.n_bins, dtype=torch.float32), constraint=constraints.positive)
-        
+
         if self.n_covs > 0:
             # Each covariate has a vector of betas, one for each bin, maybe think about different prior here?
             with pyro.plate("covariates", self.n_covs):
@@ -158,10 +174,10 @@ class raklette():
             # sample latent betas from either t or normal distribution
             if self.pdist=="t":
                 beta_sel = pyro.sample("beta_sel", dist.MixtureSameFamily(dist.Categorical(mix_probs),
-                                       dist.MultivariateStudentT(df=torch.cat((beta_prior_df, torch.tensor([1000], dtype=torch.float32))), 
-                                                                 loc=torch.cat((beta_prior_mean, 
-                                                                                torch.tensor([0]*self.n_bins, dtype=torch.float32).expand((1, self.n_bins)))), 
-                                                                 scale_tril=torch.cat((beta_prior_L, 
+                                       dist.MultivariateStudentT(df=torch.cat((beta_prior_df, torch.tensor([1000], dtype=torch.float32))),
+                                                                 loc=torch.cat((beta_prior_mean,
+                                                                                torch.tensor([0]*self.n_bins, dtype=torch.float32).expand((1, self.n_bins)))),
+                                                                 scale_tril=torch.cat((beta_prior_L,
                                                                                        torch.linalg.cholesky(torch.diag(1e-8*torch.ones(self.n_bins, dtype=torch.float32))).expand(1, self.n_bins, self.n_bins))))))
             elif self.pdist=="normal":
                 beta_sel = pyro.sample("beta_sel", dist.MixtureSameFamily(dist.Categorical(mix_probs),
@@ -178,11 +194,11 @@ class raklette():
 
         # calculate the multinomial coefficients for each gene and each mutation rate
         mu_adj = self.mu_ref[...,None] * torch.cumsum(beta_prior_b, -1) * beta_trans[...,None,:]
-        mn_sfs = (self.beta_neut  - 
+        mn_sfs = (self.beta_neut  -
                   beta_trans[...,None,:] -
                   mu_adj)
         # convert to probabilities per-site and adjust for covariates
-        if self.n_covs > 0:            
+        if self.n_covs > 0:
             sfs = softmax(pad(mn_sfs[..., gene_ids, mu_vals, :] - covariates * torch.cumsum(beta_cov, -1)))
         else:
             sfs = softmax(pad(mn_sfs[..., gene_ids, mu_vals, :]))
@@ -190,9 +206,8 @@ class raklette():
         with pyro.plate("sites", n_sites):
             pyro.sample("obs", dist.Categorical(sfs), obs=sample_sfs)
 
-            
+
 def post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, ref_mu_ii = -1, pdist = "t", trans = "abs", post_samps=10000):
-    
 #     bin_columns = []
 #     for i in range(5):
 #         bin_columns.append(str(i) + "_bin")
