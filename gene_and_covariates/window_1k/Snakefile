@@ -36,7 +36,7 @@ chrom_set = [str(x) for x in range(1, 23)]
 
 wildcard_constraints:
     chrom="\d+"
-    
+
 file_directory = "window_1k"
 
 ###################################################################################################################
@@ -55,7 +55,7 @@ rule all:
         [os.path.join(scratch_dir, "kl_input/"+ file_directory + "/" + header + "_length.txt") for header in file_names],
         [os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + header +"_lr_0.001_epoch_3000.pkl") for header in file_names]
 
-        
+
 ###################################### filter sites for KL analysis ######################################
 
 rule make_tsv_files:
@@ -65,15 +65,15 @@ rule make_tsv_files:
         os.path.join(scratch_dir, "kl_input/" + file_directory + "/{chrom}.tsv")
     run:
         with Client() as client:
-            
+
             rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
-            
+
             print(rate.columns)
-                        
+
             include_columns = ["mu_index", "Freq_bin","window_1k"]
-            
+
             rate = rate[include_columns]
-            
+
             rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
 
 # rule sort:
@@ -83,13 +83,10 @@ rule make_tsv_files:
 #         os.path.join(scratch_dir, "kl_input/" + file_directory + "/{chrom}_sorted.tsv")
 #     run:
 #         with Client() as client:
-            
 #             rate = dd.read_csv(input[0], sep = "\t")
-            
-#             rate = rate.sort_values('window_1k')  
-            
+#             rate = rate.sort_values('window_1k') 
 #             rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
-            
+
 rule split_into_5k_genes:
     input:
         os.path.join(scratch_dir, "kl_input/" + file_directory + "/{chrom}.tsv")
@@ -97,28 +94,28 @@ rule split_into_5k_genes:
         os.path.join(scratch_dir, "kl_input/" + file_directory + "/{chrom}_split_5k_0.tsv")
     run:
         with Client() as client:
-            
+
             rate = dd.read_csv(input[0], sep = "\t")
-            
+
             maximum = rate["window_1k"].max().compute()
-            
+
             max_iterator = int(maximum / split_by)
-            
+
             print(str(maximum))
-            
+
             for i in range(max_iterator + 1):
                 rate_filtered = rate[(rate["window_1k"] < (i + 1) * split_by) & (rate["window_1k"] >= i * split_by)]
-                
+
                 rate_filtered = rate_filtered.compute()
-                
+
                 rate_filtered = rate_filtered.sort_values('window_1k')
-                
+
                 unique_list =list(rate_filtered["window_1k"].unique())
 
                 unique_list.sort()
-    
+
                 rate_filtered["gene"] = [unique_list.index(x) for x in rate_filtered['window_1k']]
-        
+
                 rate_filtered[["mu_index", "Freq_bin", "gene", "window_1k"]].to_csv(os.path.join(scratch_dir, "kl_input/" + file_directory + "/" + wildcards.chrom +"_split_5k_" + str(i) + ".tsv"), sep = "\t", index = None)
             
             
@@ -155,7 +152,7 @@ rule split_into_3k_genes:
                                      str(output_iterator) +".tsv"), sep = "\t", index = None)
             output_iterator += 1
 
-############################################# make site with no genes ##############################################          
+############################################# make site with no genes ##############################################
 rule get_length:
     input:
         os.path.join(scratch_dir, "kl_input/{header}.tsv")
