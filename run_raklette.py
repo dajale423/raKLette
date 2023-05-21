@@ -25,7 +25,7 @@ class TSVDataset(Dataset):
     def __init__(self, path, chunksize, nb_samples, header_all, features):
         self.path = path
         self.chunksize = chunksize
-        self.len = nb_samples // self.chunksize # Doesn't floor division leave out some samples?
+        self.len = nb_samples // self.chunksize + 1
         self.header = header_all
         self.features = features
 
@@ -49,7 +49,8 @@ class TSVDataset(Dataset):
 ########################################################################################################
 # Main Function
 ########################################################################################################
-def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, output_filename, lr):
+def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, output_filename, lr, gamma):
+    #lr is initial learning rate
 
     print("running raklette", flush=True)
 
@@ -70,8 +71,13 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
 
     #run inference
     pyro.clear_param_store()
+    
+    num_steps = num_epochs * len(loader)
+    lrd = gamma ** (1 / num_steps)
+    
     # run SVI
-    optimizer = pyro.optim.Adam({"lr":lr})
+    optimizer = pyro.optim.ClippedAdam({"lr":lr, 'lrd': lrd})
+#     optimizer = pyro.optim.Adam({"lr":lr})
     elbo = pyro.infer.Trace_ELBO(num_particles=1, vectorize_particles=True)
     svi = pyro.infer.SVI(model, guide, optimizer, elbo)
     losses = []
