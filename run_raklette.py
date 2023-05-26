@@ -49,7 +49,7 @@ class TSVDataset(Dataset):
 ########################################################################################################
 # Main Function
 ########################################################################################################
-def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, output_filename, lr, gamma):
+def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, output_filename, lr, gamma, fit_prior = True):
     #lr is initial learning rate
 
     print("running raklette", flush=True)
@@ -65,7 +65,12 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
     print("number of bins: " + str(n_bins), flush = True)
 
     #define model and guide
-    KL = raklette_updated.raklette(neutral_sfs, n_bins, mu_ref, n_covs, n_genes)
+    KL = raklette_updated.raklette(neutral_sfs, n_bins, mu_ref, n_covs, n_genes, fit_prior = fit_prior)
+    
+    if fit_prior == False:
+        print("fitting with predefined prior for genes", flush = True)
+        
+        
     model = KL.model
     guide = pyro.infer.autoguide.AutoNormal(model)
 
@@ -125,7 +130,7 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
 
     ##############################post inference##############################
     
-    result = raklette_updated.post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses)
+    result = raklette_updated.post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, fit_prior = fit_prior)
 
     with open(output_filename, 'wb') as f:
         pickle.dump(result, f)
