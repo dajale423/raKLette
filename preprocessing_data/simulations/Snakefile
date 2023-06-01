@@ -1,0 +1,53 @@
+import os
+import sys
+import glob
+import numpy as np
+import pandas as pd
+import math
+import sys
+import random
+import pickle
+import dask.dataframe as dd
+from dask.distributed import Client, LocalCluster
+
+sys.path.insert(0,'/home/djl34/lab_pd/bin')
+import genomic
+
+pd_data_dir = "/home/djl34/lab_pd/data"
+KL_data_dir = "/home/djl34/lab_pd/kl/data"
+scratch_dir = "/n/scratch3/users/d/djl34"
+
+base_set = ["A", "C", "T", "G"]
+chrom_set = [str(x) for x in range(1, 23)]
+# chrom_set = ["22"]
+
+wildcard_constraints:
+    chrom="\d+"
+    
+rule all:
+    input:
+        [os.path.join(scratch_dir, "simulations/mut_list//" + chrom +".tsv") for chrom in chrom_set],
+        
+########################################## from mut model to tsv file#######################################################
+rule get_mutation_rate_distribution:
+    input:
+        os.path.join(KL_data_dir, "whole_genome/enhancer/{chrom}/metadata")
+    output:
+        os.path.join(scratch_dir, "simulations/mut_list/{chrom}.tsv")
+    run:
+        from dask.distributed import Client
+
+        with Client() as client:
+            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+            
+            ddf_mu = rate.groupby("mu_newbin").size().compute()
+
+            df_mu = pd.DataFrame(ddf_mu, columns = ["sites"]).reset_index()
+            
+            df_mu.to_csv(output[0], sep = "\t", single_file = True, index = None)
+    
+
+            
+
+            
+

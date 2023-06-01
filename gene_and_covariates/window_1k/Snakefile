@@ -59,9 +59,11 @@ rule all:
 #         [os.path.join(scratch_dir, "kl_input/"+ file_directory + "/" + chrom +"_split_500_0.tsv") for chrom in chrom_set],
 #         [os.path.join(scratch_dir, "kl_input/"+ file_directory + "/" + header + "_length.txt") for header in file_names],
 #         [os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + header +"_lr_0.01_gamma_0.1_epoch_3000.pkl") for header in file_names],
-#         os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary_lr_0.01_gamma_0.1_epoch_3000.tsv"),
-#         os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary_lr_0.01_gamma_0.1_epoch_3000_combined.tsv"),
+        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary_lr_0.01_gamma_0.1_epoch_3000.tsv"),
+        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary_lr_0.01_gamma_0.1_epoch_3000_combined.tsv"),
         [os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + header +"_lr_0.01_gamma_0.1_epoch_1000_nopriorfit.pkl") for header in file_names],
+        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary_lr_0.01_gamma_0.1_epoch_1000_nopriorfit.tsv"),
+        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary_lr_0.01_gamma_0.1_epoch_1000_nopriorfit_combined.tsv")
 
 
 ###################################### filter sites for KL analysis ######################################
@@ -325,82 +327,8 @@ rule run_KL_enhancer_module:
 
             #now with checkpoints
             run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, output_filename, float(wildcards.learning_rate), float(wildcards.gamma))
-        
-rule post_analysis:
-    input:
-        [os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + header +"_lr_0.01_gamma_0.1_epoch_3000.pkl") for header in file_names] 
-    output:
-        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary_lr_0.01_gamma_0.1_epoch_3000.tsv")
-    run:
-        list_of_list = []
-        
-        print(len(input), flush=True)
-        
-        for i in range(len(input)):
-            print(i, flush=True)
-            filename = input[i]
-            with open(filename, 'rb') as f:
-                loaded_dict = pickle.load(f)
-                
-            filename = filename.split("/")[-1]
-            
-#             for j in range(len(loaded_dict["KL_fw_post"].mean(axis = 0))):
-            kl_fw_list = ','.join(str(x) for x in loaded_dict["KL_fw_post"].mean(axis = 0))
-            kl_rv_list = ','.join(str(x) for x in loaded_dict["KL_rv_post"].mean(axis = 0))
-
-            list_of_list.append([filename, float(loaded_dict["beta_prior_df"]), kl_fw_list, kl_rv_list, loaded_dict["losses"][-1]])
-            
-        df = pd.DataFrame(list_of_list, columns = ["filename", "beta_prior_df", "KL_fw_post", "KL_rv_post", "loss"])
-        df.to_csv(output[0], sep = "\t", index = None)
-                          
-rule combine_summary_data:
-    input:
-        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary_lr_0.01_gamma_0.1_epoch_3000.tsv")
-    output:
-        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary_lr_0.01_gamma_0.1_epoch_3000_combined.tsv")
-    run:
-        
-        df = pd.read_csv(input[0], sep = "\t")
-        df["KL_fw_post"] = df["KL_fw_post"].str.split(",")
-        df["KL_rv_post"] = df["KL_rv_post"].str.split(",")
-        
-        first = True
-
-        for index, row in df.iterrows():
-            print(index, flush = True)
-            df_row = pd.DataFrame(row).T
-
-            filename = df_row["filename"].iloc[0]
-            df_summary = pd.read_csv(scratch_dir + "/kl_input/window_1k/" +"_".join(filename.split("_")[0:4]) + ".tsv", sep = "\t")
-            df_summary = df_summary[["gene", "window_1k"]].drop_duplicates()
-            df_add = df_row.explode(['KL_fw_post', 'KL_rv_post'], ignore_index = True).reset_index(names = "gene")
-            df_add = df_add.merge(df_summary, on = "gene", how = "left")
-            
-            if first:
-                df_all = df_add
-                first = False
-            else:
-                df_all = pd.concat([df_all, df_add])
-                
-        df_all["Chrom"] = df_all["filename"].str.split("_", expand = True)[0]
-        
-        first = True
-        
-        for chrom in chrom_set:
-            df_all_chrom = df_all[df_all["Chrom"] == chrom]
-            
-            df_window_zscore = pd.read_csv(os.path.join(KL_data_dir, "window_1_zscore/" + chrom + ".tsv"), sep = "\t")
-            df_all_chrom = df_all_chrom.merge(df_window_zscore, on = "window_1k", how = "left")
-            
-            if first:
-                df_all_chrom.to_csv(output[0], sep = "\t", index = None)
-                first = False
-            else:
-                df_all_chrom.to_csv(output[0], sep = "\t", index = None, mode='a', header=False)
-                
-            
-########################################## For running KL analysis without fitting prior #####################################
-        
+       
+    
 rule run_KL_enhancer_module_noprior:
     input:
         variants = os.path.join(scratch_dir, "kl_input/{header}.tsv"),
@@ -442,4 +370,79 @@ rule run_KL_enhancer_module_noprior:
 
             #now with checkpoints
             run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, output_filename, float(wildcards.learning_rate), float(wildcards.gamma), fit_prior = False)
+    
+rule post_analysis:
+    input:
+        [os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + header +"{tail}.pkl") for header in file_names] 
+    output:
+        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary{tail}.tsv")
+    run:
+        list_of_list = []
+        
+        print(len(input), flush=True)
+        
+        for i in range(len(input)):
+            print(i, flush=True)
+            filename = input[i]
+            with open(filename, 'rb') as f:
+                loaded_dict = pickle.load(f)
+                
+            filename = filename.split("/")[-1]
+            
+#             for j in range(len(loaded_dict["KL_fw_post"].mean(axis = 0))):
+            kl_fw_list = ','.join(str(x) for x in loaded_dict["KL_fw_post"].mean(axis = 0))
+            kl_rv_list = ','.join(str(x) for x in loaded_dict["KL_rv_post"].mean(axis = 0))
+
+            list_of_list.append([filename, kl_fw_list, kl_rv_list, loaded_dict["losses"][-1]])
+            
+        df = pd.DataFrame(list_of_list, columns = ["filename", "KL_fw_post", "KL_rv_post", "loss"])
+        df.to_csv(output[0], sep = "\t", index = None)
+                          
+rule combine_summary_data:
+    input:
+        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary{tail}.tsv")
+    output:
+        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary{tail}_combined.tsv")
+    run:
+        
+        df = pd.read_csv(input[0], sep = "\t")
+        df["KL_fw_post"] = df["KL_fw_post"].str.split(",")
+        df["KL_rv_post"] = df["KL_rv_post"].str.split(",")
+        
+        first = True
+        
+        print(len(df), flush = True)
+
+        for index, row in df.iterrows():
+            print(index, flush = True)
+            df_row = pd.DataFrame(row).T
+
+            filename = df_row["filename"].iloc[0]
+            df_summary = pd.read_csv(scratch_dir + "/kl_input/window_1k/" +"_".join(filename.split("_")[0:4]) + ".tsv", sep = "\t")
+            df_summary = df_summary[["gene", "window_1k"]].drop_duplicates()
+            df_add = df_row.explode(['KL_fw_post', 'KL_rv_post'], ignore_index = True).reset_index(names = "gene")
+            df_add = df_add.merge(df_summary, on = "gene", how = "left")
+            
+            if first:
+                df_all = df_add
+                first = False
+            else:
+                df_all = pd.concat([df_all, df_add])
+                
+        df_all["Chrom"] = df_all["filename"].str.split("_", expand = True)[0]
+        
+        first = True
+        
+        for chrom in chrom_set:
+            df_all_chrom = df_all[df_all["Chrom"] == chrom]
+            
+            df_window_zscore = pd.read_csv(os.path.join(KL_data_dir, "window_1_zscore/" + chrom + ".tsv"), sep = "\t")
+            df_all_chrom = df_all_chrom.merge(df_window_zscore, on = "window_1k", how = "left")
+            
+            if first:
+                df_all_chrom.to_csv(output[0], sep = "\t", index = None)
+                first = False
+            else:
+                df_all_chrom.to_csv(output[0], sep = "\t", index = None, mode='a', header=False)
+                
             
