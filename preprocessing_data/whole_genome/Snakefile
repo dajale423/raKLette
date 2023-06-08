@@ -29,17 +29,17 @@ rule all:
 #         [os.path.join(scratch_dir, "whole_genome/mu_filtered/" + chrom +"/_metadata") for chrom in chrom_set],
 #         [os.path.join(scratch_dir, "whole_genome/gnomad_ac/" + chrom +"/_metadata") for chrom in chrom_set],
 #         [os.path.join(scratch_dir, "whole_genome/gnomad_cov/" + chrom +"/_metadata") for chrom in chrom_set],
-#         [os.path.join(scratch_dir, "whole_genome/new_rate_bin/" + chrom +"/_metadata") for chrom in chrom_set],
-#         [os.path.join(scratch_dir, "whole_genome/neutral/" + chrom +"/_metadata") for chrom in chrom_set],
-#         [os.path.join(scratch_dir, "whole_genome/neutral/5_bins/" + chrom +"/_metadata") for chrom in chrom_set],
-#         [os.path.join(scratch_dir, "whole_genome/neutral/5_bins/" + chrom +".tsv") for chrom in chrom_set],
-#         os.path.join(KL_data_dir, "whole_genome/neutral/5_bins/all.tsv"),
-#         [os.path.join(scratch_dir, "whole_genome/windows/" + chrom +"/_metadata") for chrom in chrom_set],
-#         [os.path.join(scratch_dir, "whole_genome/windows_zscore/" + chrom +"/_metadata") for chrom in chrom_set],
-#         [os.path.join(scratch_dir, "whole_genome/mu_index/" + chrom +"/_metadata") for chrom in chrom_set],
-#         [os.path.join(KL_data_dir, "whole_genome/enhancer/" + chrom +"/_metadata") for chrom in chrom_set],
+        [os.path.join(scratch_dir, "whole_genome/new_rate_bin/" + chrom +"/_metadata") for chrom in chrom_set],
+        [os.path.join(scratch_dir, "whole_genome/neutral/" + chrom +"/_metadata") for chrom in chrom_set],
+        [os.path.join(scratch_dir, "whole_genome/neutral/5_bins/" + chrom +"/_metadata") for chrom in chrom_set],
+        [os.path.join(scratch_dir, "whole_genome/neutral/5_bins/" + chrom +".tsv") for chrom in chrom_set],
+        os.path.join(KL_data_dir, "whole_genome/neutral/5_bins/all.tsv"),
+        [os.path.join(scratch_dir, "whole_genome/windows/" + chrom +"/_metadata") for chrom in chrom_set],
+        [os.path.join(scratch_dir, "whole_genome/windows_zscore/" + chrom +"/_metadata") for chrom in chrom_set],
+        [os.path.join(scratch_dir, "whole_genome/mu_index/" + chrom +"/_metadata") for chrom in chrom_set],
+        [os.path.join(KL_data_dir, "whole_genome/enhancer/" + chrom +"/_metadata") for chrom in chrom_set],
 #         [os.path.join(scratch_dir, "whole_genome/exon/" + chrom +"/_metadata") for chrom in chrom_set],
-        [os.path.join(scratch_dir, "whole_genome/phylop/" + chrom +"/_metadata") for chrom in chrom_set],
+#         [os.path.join(scratch_dir, "whole_genome/phylop/" + chrom +"/_metadata") for chrom in chrom_set],
         
 ########################################## from mut model to tsv file#######################################################
 rule unzip_vova_model:
@@ -162,6 +162,8 @@ rule add_gnomAD_v3_coverage:
 ###################################################### bin mutation rate #######################################################
 # bin mutation rate b/c some bins are too small
 
+0.130
+
 rule bin_mutation_rate:
     input:
         os.path.join(scratch_dir, "whole_genome/gnomad_cov/{chrom}/_metadata"),
@@ -177,6 +179,8 @@ rule bin_mutation_rate:
                         return 0.013
                     if mu == 0.12:
                         return 0.117
+                    if mu == 0.130:
+                        return 0.128
                     if mu == 0.23:
                         return 0.236
                     return mu
@@ -296,6 +300,7 @@ rule make_windows_zscore:
 rule add_mu_index:
     input:
         os.path.join(scratch_dir, "whole_genome/windows_zscore/{chrom}/_metadata"),
+        os.path.join(KL_data_dir, "whole_genome/neutral/5_bins/all.tsv")
     output:
         os.path.join(scratch_dir, "whole_genome/mu_index/{chrom}/_metadata"),
     run:

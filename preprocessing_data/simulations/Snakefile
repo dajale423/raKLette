@@ -13,25 +13,45 @@ from dask.distributed import Client, LocalCluster
 sys.path.insert(0,'/home/djl34/lab_pd/bin')
 import genomic
 
+sys.path.insert(0, "/home/djl34/lab_pd/simulator/code")
+import demography as dm
+from others import round_sig
+
 pd_data_dir = "/home/djl34/lab_pd/data"
 KL_data_dir = "/home/djl34/lab_pd/kl/data"
 scratch_dir = "/n/scratch3/users/d/djl34"
+simulation_dir = "/home/djl34/lab_pd/simulator/data/SFS_output_v2.6.1_recurrent_slow/gao/raw_SFS/"
+
 
 base_set = ["A", "C", "T", "G"]
 chrom_set = [str(x) for x in range(1, 23)]
 # chrom_set = ["22"]
+
+mu_list = [1e-09, 3e-09, 1e-08, 3e-08, 1e-07, 3e-07]
+
+selection_list = [0.0]
+mut_list = [0.1, 0.01, 0.001]
+for i in range(10):
+    selection_list.extend([x*i for x in mut_list])
+selection_list = [round_sig(x, sig = 1) for x in selection_list]
+
 
 wildcard_constraints:
     chrom="\d+"
     
 rule all:
     input:
-        [os.path.join(scratch_dir, "simulations/mut_list//" + chrom +".tsv") for chrom in chrom_set],
+#         [os.path.join(scratch_dir, "simulations/mut_list/" + chrom +".tsv") for chrom in chrom_set],
+#         [os.path.join(scratch_dir, "simulations/mut_list/" + chrom +"_bin6.tsv") for chrom in chrom_set],
+#         os.path.join(KL_data_dir, "simulations/mu_bin6_distribution.tsv"),
+#         [os.path.join(KL_data_dir, "simulations/5_bins/SFS_mu_"+ str(mu) +"_Slinear_-"+ str(selection) +".tsv") for mu in mu_list for selection in selection_list],
+        os.path.join(KL_data_dir, "simulations/5_bins/SFS_mu_neutral.tsv")
+
         
-########################################## from mut model to tsv file#######################################################
+########################################## get mutation rate distribution #######################################################
 rule get_mutation_rate_distribution:
     input:
-        os.path.join(KL_data_dir, "whole_genome/enhancer/{chrom}/metadata")
+        os.path.join(KL_data_dir, "whole_genome/enhancer/{chrom}/_metadata")
     output:
         os.path.join(scratch_dir, "simulations/mut_list/{chrom}.tsv")
     run:
@@ -44,10 +64,107 @@ rule get_mutation_rate_distribution:
 
             df_mu = pd.DataFrame(ddf_mu, columns = ["sites"]).reset_index()
             
-            df_mu.to_csv(output[0], sep = "\t", single_file = True, index = None)
+            df_mu.to_csv(output[0], sep = "\t", index = None)
+
+scale = 1.015 * 10**-7
+
+rule get_mutation_rate_bin_6:
+    input:
+        os.path.join(scratch_dir, "simulations/mut_list/{chrom}.tsv")    
+    output:
+        os.path.join(scratch_dir, "simulations/mut_list/{chrom}_bin6.tsv")  
+    run:
+        df = pd.read_csv(input[0], sep = "\t")
+
+        df["mu_pergen"] = df["mu_newbin"] * scale
+        
+        mu_list_6 = [1e-09, 3e-09, 1e-08, 3e-08, 1e-07, 3e-07]
+
+        df["mu_pergen_log"] = np.log10(df["mu_pergen"])
+        
+        mu_list_freq_breaks = []
+        mu_list_freq_breaks.append(0.0)
+
+        for i in range(len(mu_list_6) - 1):
+            mu_list_freq_breaks.append((10**((np.log10(mu_list_6[i]) + np.log10(mu_list_6[i + 1]))/2)))
     
+        mu_list_freq_breaks.append(4e-7)
+        
+        df['mu_bin'] = pd.cut(df["mu_pergen"], mu_list_freq_breaks, labels = False)
+        
+        df_bin = pd.DataFrame(df.groupby("mu_bin")["sites"].sum()).reset_index()
 
+        df_bin.to_csv(output[0], sep = "\t", index = None)
+
+rule combine_mutation_rate_bin_6:
+    input:
+        [os.path.join(scratch_dir, "simulations/mut_list/" + chrom +"_bin6.tsv") for chrom in chrom_set]   
+    output:
+        os.path.join(KL_data_dir, "simulations/mu_bin6_distribution.tsv")  
+    run:
+        from dask.distributed import Client
+
+        with Client() as client:
+            df = dd.read_csv(input, sep = "\t")
+
+            df_all = pd.DataFrame(df.groupby("mu_bin")["sites"].sum()).reset_index()
             
+            df_all["prop"] = df_all["sites"]/df_all["sites"].sum()
 
+            df_all.to_csv(output[0], sep = "\t", index = None)
             
+############################################### make multinom SFS #######################################################
 
+rule make_multinom_sfs:
+    input:
+        os.path.join(simulation_dir, "SFS_gao_2N_20000_Slinear__-{selection}_h_0.5_mu_{mu}_L_5.0_growth_0.0057_growthbeta_1.122_scalingfactor_1.0_seed_20_sample_64598_unfolded.tsv")
+    output:
+        os.path.join(KL_data_dir, "simulations/5_bins/SFS_mu_{mu}_Slinear_-{selection}.tsv")  
+    run:
+        sfs = pd.read_csv(input[0], sep = "\t")
+        
+        def make_multinom(sfs, AN, freq_break):
+            sfs_folded = dm.fold_sfs(sfs, AN)
+            sfs_folded["AF"] = sfs_folded["MAC"]/AN
+            sfs_folded['bin'] = pd.cut(sfs_folded["AF"], freq_break, labels = False)
+            sfs_multinom = sfs_folded[["bin", "Number"]].groupby("bin").sum().reset_index()
+            sfs_multinom["prop"] = sfs_multinom["Number"]/sfs_multinom["Number"].sum()
+    
+            return sfs_multinom
+        
+        AN = 64598
+        freq_breaks_5_bins = [-1, 1e-8, 0.00005, 0.0005, 0.05, 0.5]
+        
+        sfs_multinom = make_multinom(sfs, AN, freq_breaks_5_bins)
+        
+        sfs_multinom.to_csv(output[0], sep = "\t", index = None)
+        
+rule make_neutral_sfs:
+    input:
+        [os.path.join(KL_data_dir, "simulations/5_bins/SFS_mu_" + str(mu) +"_Slinear_-0.0.tsv") for mu in mu_list]
+    output:
+        os.path.join(KL_data_dir, "simulations/5_bins/SFS_mu_neutral.tsv")
+    run:
+        bin_columns = []
+        for i in range(5):
+            bin_columns.append(str(float(i)))
+
+        first = True
+
+        for i in range(len(mu_list)):
+            df_sfs = pd.read_csv(input[i], sep = "\t")
+            df_row = df_sfs[["prop"]].T
+            df_row.columns = bin_columns
+
+            df_row["mu"] = str(mu_list[i])
+
+
+            if first:
+                df_all = df_row
+                first = False
+            else:
+
+                df_all = pd.concat([df_all, df_row])
+                
+        df_all.to_csv(output[0], sep = "\t", index = None)
+    

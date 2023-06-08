@@ -259,8 +259,6 @@ def post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, ref_mu_ii 
         
         prior_samps = prior_dist.sample((post_samps,))
         prior_trans = torch.cumsum(prior_samps, dim=-1)
-        
-        
     beta_prior_b = pyro.param("beta_prior_b")
         
     ## Prior SFS probabilities for gene effects in the absence of covariates
