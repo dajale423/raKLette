@@ -10,7 +10,7 @@ from pyro.nn import PyroModule
 from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
 
-sys.path.insert(0, '/home/djl34/lab_pd/kl/git/KL')
+sys.path.insert(0, '/home/djl34/lab_pd/kl/git/KL/raklette')
 
 import raklette_updated
 
@@ -25,7 +25,12 @@ class TSVDataset(Dataset):
     def __init__(self, path, chunksize, nb_samples, header_all, features):
         self.path = path
         self.chunksize = chunksize
-        self.len = nb_samples // self.chunksize + 1
+        
+        if nb_samples % self.chunksize == 0:
+            self.len = nb_samples // self.chunksize
+        else:
+            self.len = nb_samples // self.chunksize + 1
+        
         self.header = header_all
         self.features = features
 
@@ -39,6 +44,7 @@ class TSVDataset(Dataset):
                 names=self.header))
 
         x = x[self.features]
+        x = x.astype(float)
         x = torch.from_numpy(x.values)
         return x
 
@@ -49,7 +55,7 @@ class TSVDataset(Dataset):
 ########################################################################################################
 # Main Function
 ########################################################################################################
-def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, output_filename, lr, gamma, fit_prior = True):
+def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, output_filename, lr, gamma, fit_prior = True, cov_sigma_prior = torch.tensor(0.1, dtype=torch.float32), gene_col = 2, mu_col = 0, bin_col = 1):
     #lr is initial learning rate
 
     print("running raklette", flush=True)
@@ -64,8 +70,7 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
     n_bins = len(neutral_sfs[1]) - 1
     print("number of bins: " + str(n_bins), flush = True)
 
-    #define model and guide
-    KL = raklette_updated.raklette(neutral_sfs, n_bins, mu_ref, n_covs, n_genes, fit_prior = fit_prior)
+    KL = raklette_updated.raklette(neutral_sfs, n_bins, mu_ref, n_covs, n_genes, cov_sigma_prior = cov_sigma_prior, fit_prior = fit_prior)
     
     if fit_prior == False:
         print("fitting with predefined prior for genes", flush = True)
@@ -92,13 +97,13 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
 
         # Take a gradient step for each mini-batch in the dataset
         for batch_idx, data in enumerate(loader):
-            gene_ids = data[:,:,2].reshape(-1)
+            gene_ids = data[:,:,gene_col].reshape(-1)
             gene_ids = gene_ids.type(torch.LongTensor)
 
-            mu_vals = data[:,:,0].reshape(-1)
+            mu_vals = data[:,:,mu_col].reshape(-1)
             mu_vals = mu_vals.type(torch.LongTensor)
 
-            freq_bins = data[:,:,1].reshape(-1)
+            freq_bins = data[:,:,bin_col].reshape(-1)
 
             if n_covs == 0:
                 loss = svi.step(mu_vals, gene_ids, None, freq_bins)
@@ -130,7 +135,7 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
 
     ##############################post inference##############################
     
-    result = raklette_updated.post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, fit_prior = fit_prior)
+    result = raklette_updated.post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, cov_sigma_prior = cov_sigma_prior, fit_prior = fit_prior)
 
     with open(output_filename, 'wb') as f:
         pickle.dump(result, f)

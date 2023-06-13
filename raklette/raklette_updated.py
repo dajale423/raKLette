@@ -20,10 +20,10 @@ import matplotlib
 
 ## Useful transformations
 ####################################################
-pad = torch.nn.ConstantPad1d((1,0), 0.)            # Add a 0 to a tensor
-softmax = torch.nn.Softmax(-1)                     # softmax transform along the last dimension
-relu = torch.nn.ReLU()                             # map everything < 0 -> 0
-order_trans = dist.transforms.OrderedTransform()   # y_0=x_0; y_i=y_0+sum_j=1^i exp(x_j) [not really used anymore, weird properties]
+pad = torch.nn.ConstantPad1d((1,0), 0.)           # Add a 0 to a tensor
+softmax = torch.nn.Softmax(-1)                    # softmax transform along the last dimension
+relu = torch.nn.ReLU()                            # map everything < 0 -> 0
+order_trans = dist.transforms.OrderedTransform()  # y_0=x_0; y_i=y_0+sum_j=1^i exp(x_j) [not really used anymore, weird properties]
 ####################################################
 
 ## Transformations of the SFS
@@ -106,8 +106,8 @@ def calc_KL_genewise(fit, ref_mu_ii=None):
     return fit
 
 class raklette():
-    def __init__(self, neut_sfs_full, n_bins, mu_ref, n_covs, n_genes,
-                 n_mix=2, cov_sigma_prior=torch.tensor(0.1, dtype=torch.float32), ref_mu_ii=-1,
+    def __init__(self, neut_sfs_full, n_bins, mu_ref, n_covs, n_genes, cov_sigma_prior,
+                 n_mix=2, ref_mu_ii=-1,
                  trans="abs", pdist="t", fit_prior = True):
 
 #         mu = torch.unique(mu_vals)             # set of all possible mutation rates
@@ -212,7 +212,7 @@ class raklette():
         with pyro.plate("sites", n_sites):
             pyro.sample("obs", dist.Categorical(sfs), obs=sample_sfs)
             
-def post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, ref_mu_ii = -1, pdist = "t", trans = "abs", post_samps=10000, fit_prior = True, cov_sigma_prior = torch.tensor(0.1, dtype=torch.float32)):
+def post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, cov_sigma_prior, ref_mu_ii = -1, pdist = "t", trans = "abs", post_samps=10000, fit_prior = True):
 #     bin_columns = []
 #     for i in range(5):
 #         bin_columns.append(str(i) + "_bin")
@@ -259,6 +259,7 @@ def post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, ref_mu_ii 
         
         prior_samps = prior_dist.sample((post_samps,))
         prior_trans = torch.cumsum(prior_samps, dim=-1)
+        
     beta_prior_b = pyro.param("beta_prior_b")
         
     ## Prior SFS probabilities for gene effects in the absence of covariates

@@ -21,7 +21,7 @@ from pyro.nn import PyroModule
 from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
 
-sys.path.insert(0, '/home/djl34/lab_pd/kl/git/KL')
+sys.path.insert(0, '/home/djl34/lab_pd/kl/git/KL/raklette')
 import raklette_updated
 from run_raklette import run_raklette
 from run_raklette import TSVDataset
@@ -48,6 +48,8 @@ file_names = glob.glob("/home/djl34/scratch/kl_input/window_1k/*_split_500*.tsv"
 file_names = [x.split("/")[-1] for x in file_names]
 file_names = [".".join(x.split(".")[:-1]) for x in file_names]
 
+# file_names = file_names[0:10]
+
 ###################################################################################################################
 
 rule all:
@@ -59,13 +61,12 @@ rule all:
 #         [os.path.join(scratch_dir, "kl_input/"+ file_directory + "/" + chrom +"_split_500_0.tsv") for chrom in chrom_set],
 #         [os.path.join(scratch_dir, "kl_input/"+ file_directory + "/" + header + "_length.txt") for header in file_names],
 #         [os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + header +"_lr_0.01_gamma_0.1_epoch_3000.pkl") for header in file_names],
-        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary_lr_0.01_gamma_0.1_epoch_3000.tsv"),
-        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary_lr_0.01_gamma_0.1_epoch_3000_combined.tsv"),
-        [os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + header +"_lr_0.01_gamma_0.1_epoch_1000_nopriorfit.pkl") for header in file_names],
-        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary_lr_0.01_gamma_0.1_epoch_1000_nopriorfit.tsv"),
-        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary_lr_0.01_gamma_0.1_epoch_1000_nopriorfit_combined.tsv")
-
-
+#         os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary_lr_0.01_gamma_0.1_epoch_3000.tsv"),
+#         os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary_lr_0.01_gamma_0.1_epoch_3000_combined.tsv"),
+        [os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + header +"_lr_0.01_gamma_0.1_epoch_1000_nopriorfit_covprior_0.001.pkl") for header in file_names],
+        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary_lr_0.01_gamma_0.1_epoch_1000_nopriorfit_covprior_0.001.tsv"),
+        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary_Zscore_lr_0.01_gamma_0.1_epoch_1000_nopriorfit_covprior_0.001_combined.tsv")
+        
 ###################################### filter sites for KL analysis ######################################
 
 # rule make_tsv_files:
@@ -370,6 +371,52 @@ rule run_KL_enhancer_module_noprior:
 
             #now with checkpoints
             run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, output_filename, float(wildcards.learning_rate), float(wildcards.gamma), fit_prior = False)
+            
+rule run_KL_noprior_covprior:
+    input:
+        variants = os.path.join(scratch_dir, "kl_input/{header}.tsv"),
+        length_file = os.path.join(scratch_dir, "kl_input/{header}_length.txt"),
+        neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all.tsv"
+    output:
+        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/{header}_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_nopriorfit_covprior_{cov_prior}.pkl")
+    run:
+        n_covs = 0
+        
+        input_filename = input.variants
+        output_filename = output[0]
+        neutral_sfs_filename = input.neutral_sfs
+        
+        df = pd.read_csv(input.length_file, sep = "\t", header = None)
+        nb_samples = df[0][0]
+        n_genes = df[0][1]
+        
+        print("number of samples: " + str(nb_samples))
+        print("number of genes: " + str(n_genes))
+        
+        if nb_samples == 0:
+            f = open(output_filename, "w")
+            f.write("no sample")
+            f.close()
+        else:        
+            with open(input.variants) as f:
+                first_line = f.readline()
+            header = first_line.split("\t")
+            
+            chunksize = 1000000
+
+            print("number of chunks " + str(nb_samples/chunksize))
+
+            dataset = TSVDataset(input_filename, chunksize=chunksize, nb_samples = nb_samples, header_all = header, features = header)
+            loader = DataLoader(dataset, batch_size=1, num_workers=1, shuffle=False)
+
+            num_epochs = int(wildcards.epoch)
+
+            #now with checkpoints
+            run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, output_filename, float(wildcards.learning_rate), float(wildcards.gamma), fit_prior = False, cov_sigma_prior = torch.tensor(float(wildcards.cov_prior), dtype=torch.float32))
+    
+    
+########################################## Post Analysis #####################################
+
     
 rule post_analysis:
     input:
@@ -402,7 +449,7 @@ rule combine_summary_data:
     input:
         os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary{tail}.tsv")
     output:
-        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary{tail}_combined.tsv")
+        os.path.join(KL_data_dir, "raklette_output/gene_and_covariates/"+ file_directory + "/" + "summary_Zscore{tail}_combined.tsv")
     run:
         
         df = pd.read_csv(input[0], sep = "\t")
