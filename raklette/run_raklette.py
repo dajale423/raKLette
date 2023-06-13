@@ -74,8 +74,7 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
     
     if fit_prior == False:
         print("fitting with predefined prior for genes", flush = True)
-        
-        
+                
     model = KL.model
     guide = pyro.infer.autoguide.AutoNormal(model)
 
@@ -121,10 +120,15 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
                 print(batch_idx, flush=True)
                 print(loss, flush=True)
 
-    model_filename = ".".join(output_filename.split(".")[:-1]) + ".save"
+    model_filename = ".".join(output_filename.split(".")[:-1]) + ".model"
+    
+    output_dict = {}
+    output_dict['model']=model
+    output_dict['guide']=guide
+    
+    with open(model_filename, 'wb') as handle:
+        pickle.dump(output_dict, handle)
 
-    #save model parameters
-    pyro.get_param_store().save(model_filename)
 
     #     # Tell the scheduler we've done one epoch.
     #     scheduler.step()
