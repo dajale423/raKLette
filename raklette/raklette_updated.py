@@ -106,7 +106,7 @@ def calc_KL_genewise(fit, ref_mu_ii=None):
     return fit
 
 class raklette():
-    def __init__(self, neut_sfs_full, n_bins, mu_ref, n_covs, n_genes, cov_sigma_prior,
+    def __init__(self, neut_sfs_full, n_bins, mu_ref, n_covs, n_genes, cov_sigma_prior = torch.tensor(0.1, dtype=torch.float32),
                  n_mix=2, ref_mu_ii=-1,
                  trans="abs", pdist="t", fit_prior = True):
 
@@ -114,6 +114,8 @@ class raklette():
 #         n_mu = len(mu)                         # number of unique mutation rates
 
         beta_neut_full = multinomial_trans_torch(neut_sfs_full) #neut_sfs_full is the neutral sfs
+        self.beta_neut_full = beta_neut_full
+
         beta_neut = beta_neut_full[ref_mu_ii,:]
         self.beta_neut = beta_neut
 
@@ -200,7 +202,7 @@ class raklette():
 
         # calculate the multinomial coefficients for each gene and each mutation rate
         mu_adj = self.mu_ref[...,None] * torch.cumsum(beta_prior_b, -1) * beta_trans[...,None,:]
-        mn_sfs = (self.beta_neut  -
+        mn_sfs = (self.beta_neut_full[None,...] -
                   beta_trans[...,None,:] -
                   mu_adj)
         # convert to probabilities per-site and adjust for covariates
