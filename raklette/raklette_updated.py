@@ -61,7 +61,7 @@ def plot_losses(losses):
     ax.set_yscale("log")
     return fig, ax
 
-def calc_KL_genewise(fit, ref_mu_ii=None):
+def calc_KL_genewise(fit, fit_interaction, ref_mu_ii=None):
     """
     Calculate KL between the neutral distribution at a reference mutation rate and 
     the fit selected distribution at each gene.
@@ -73,8 +73,9 @@ def calc_KL_genewise(fit, ref_mu_ii=None):
         fit["ref_mu_ii"] = ref_mu_ii
     ref_mu_ii = fit["ref_mu_ii"]
     beta_neut = beta_neut_full[ref_mu_ii,:] # neutral betas for the reference mutation rate
-
-    beta_prior_b = fit["beta_prior_b"] # need the interaction term between mutation rate and selection
+    
+    if fit_interaction:
+        beta_prior_b = fit["beta_prior_b"] # need the interaction term between mutation rate and selection
     post_samples = fit["post_samples"] # grab dictionary with posterior samples
 
     if fit["fit_prior"]:    
@@ -92,8 +93,11 @@ def calc_KL_genewise(fit, ref_mu_ii=None):
          post_trans = torch.cumsum(post_samples["beta_sel"], dim=-1)
     
     # transform to probabilities (SFS) for ecah gene and store as a numpy array
-    post_probs = softmax(pad(beta_neut - post_trans -
+    if fit_interaction:
+        post_probs = softmax(pad(beta_neut - post_trans -
                               mu_ref[ref_mu_ii]*torch.cumsum(beta_prior_b, -1)*post_trans)).detach().numpy()
+    else:
+        post_probs = softmax(pad(beta_neut - post_trans)).detach().numpy()
     
     # calculate KL for each draw from the posterior distribution for each gene
     KL_fw_post = KL_fw(neut_sfs_full[ref_mu_ii,:].detach().numpy(), post_probs)
@@ -108,7 +112,7 @@ def calc_KL_genewise(fit, ref_mu_ii=None):
 class raklette():
     def __init__(self, neut_sfs_full, n_bins, mu_ref, n_covs, n_genes, cov_sigma_prior = torch.tensor(0.1, dtype=torch.float32),
                  n_mix=2, ref_mu_ii=-1,
-                 trans="abs", pdist="t", fit_prior = True):
+                 trans="abs", pdist="t", fit_prior = True, fit_interaction = False):
 
 #         mu = torch.unique(mu_vals)             # set of all possible mutation rates
 #         n_mu = len(mu)                         # number of unique mutation rates
@@ -129,6 +133,7 @@ class raklette():
         self.trans = trans
         self.pdist = pdist
         self.prior = fit_prior
+        self.interaction = fit_interaction
 
     def model(self, mu_vals, gene_ids, covariates = None, sample_sfs=None):
         '''
@@ -192,7 +197,8 @@ class raklette():
             beta_trans = torch.cumsum(beta_sel, dim=-1)
             
         # interaction term bewteen gene-based selection and mutation rate
-        beta_prior_b = pyro.param("beta_prior_b", torch.tensor([0.001]*self.n_bins, dtype=torch.float32), constraint=constraints.positive)
+        if self.interaction:
+            beta_prior_b = pyro.param("beta_prior_b", torch.tensor([0.001]*self.n_bins, dtype=torch.float32), constraint=constraints.positive)
             
         #beta for covariates
         if self.n_covs > 0:
@@ -201,10 +207,15 @@ class raklette():
                 beta_cov = pyro.sample("beta_cov", dist.HalfCauchy(self.cov_sigma_prior).expand([self.n_bins]).to_event(1))
 
         # calculate the multinomial coefficients for each gene and each mutation rate
-        mu_adj = self.mu_ref[...,None] * torch.cumsum(beta_prior_b, -1) * beta_trans[...,None,:]
-        mn_sfs = (self.beta_neut_full[None,...] -
+        if self.interaction:
+            mu_adj = self.mu_ref[...,None] * torch.cumsum(beta_prior_b, -1) * beta_trans[...,None,:]
+            
+            mn_sfs = (self.beta_neut_full[None,...] -
                   beta_trans[...,None,:] -
                   mu_adj)
+        else:
+            mn_sfs = self.beta_neut_full[None,...] - beta_trans[...,None,:]
+        
         # convert to probabilities per-site and adjust for covariates
         if self.n_covs > 0:
             sfs = softmax(pad(mn_sfs[..., gene_ids, mu_vals, :] - covariates * torch.cumsum(beta_cov, -1)))
@@ -214,7 +225,7 @@ class raklette():
         with pyro.plate("sites", n_sites):
             pyro.sample("obs", dist.Categorical(sfs), obs=sample_sfs)
             
-def post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, cov_sigma_prior, ref_mu_ii = -1, pdist = "t", trans = "abs", post_samps=10000, fit_prior = True):
+def post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, cov_sigma_prior, ref_mu_ii = -1, pdist = "t", trans = "abs", post_samps=10000, fit_prior = True, fit_interaction = False):
 #     bin_columns = []
 #     for i in range(5):
 #         bin_columns.append(str(i) + "_bin")
@@ -262,11 +273,17 @@ def post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, cov_sigma_
         prior_samps = prior_dist.sample((post_samps,))
         prior_trans = torch.cumsum(prior_samps, dim=-1)
         
-    beta_prior_b = pyro.param("beta_prior_b")
+    if fit_interaction:
+        beta_prior_b = pyro.param("beta_prior_b")
         
-    ## Prior SFS probabilities for gene effects in the absence of covariates
-    prior_probs = softmax(pad(beta_neut - prior_trans -
-                              mu_ref[ref_mu_ii]*torch.cumsum(beta_prior_b, -1)*prior_trans)).detach().numpy()
+        ## Prior SFS probabilities for gene effects in the absence of covariates
+        prior_probs = softmax(pad(beta_neut - prior_trans -
+                                  mu_ref[ref_mu_ii]*torch.cumsum(beta_prior_b, -1)*prior_trans)).detach().numpy()
+        
+    else:
+        ## Prior SFS probabilities for gene effects in the absence of covariates
+        prior_probs = softmax(pad(beta_neut - prior_trans)).detach().numpy()
+
 
     # take samples from the posterior distribution on all betas
     with pyro.plate("samples", post_samps, dim=-2):
@@ -276,23 +293,40 @@ def post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, cov_sigma_
     #make result into a dictionary
     if fit_prior:
         if pdist=="t":
-            result = {"neut_sfs_full":neut_sfs_full, "beta_neut_full":beta_neut_full, "ref_mu_ii":ref_mu_ii,
-                      "beta_prior_df":beta_prior_df, "beta_prior_mean":beta_prior_mean, "beta_prior_L":beta_prior_L,
-                      "mix_probs":mix_probs, 
-                      "beta_prior_b":beta_prior_b, "trans":trans,
-                      "prior_probs":prior_probs, "post_samples":post_samples, "mu_ref":mu_ref, "fit_prior":fit_prior}
+            if fit_interaction:
+                result = {"neut_sfs_full":neut_sfs_full, "beta_neut_full":beta_neut_full, "ref_mu_ii":ref_mu_ii,
+                          "beta_prior_df":beta_prior_df, "beta_prior_mean":beta_prior_mean, "beta_prior_L":beta_prior_L,
+                          "mix_probs":mix_probs, 
+                          "beta_prior_b":beta_prior_b, "trans":trans,
+                          "prior_probs":prior_probs, "post_samples":post_samples, "mu_ref":mu_ref, "fit_prior":fit_prior}
+            else:
+                result = {"neut_sfs_full":neut_sfs_full, "beta_neut_full":beta_neut_full, "ref_mu_ii":ref_mu_ii,
+                          "beta_prior_df":beta_prior_df, "beta_prior_mean":beta_prior_mean, "beta_prior_L":beta_prior_L,
+                          "mix_probs":mix_probs, "trans":trans,
+                          "prior_probs":prior_probs, "post_samples":post_samples, "mu_ref":mu_ref, "fit_prior":fit_prior}
         elif pdist=="normal":
-            result = {"neut_sfs_full":neut_sfs_full, "beta_neut_full":beta_neut_full, "ref_mu_ii":ref_mu_ii,
-                      "beta_prior_scale":beta_prior_scale, "beta_prior_loc":beta_prior_loc,
-                      "mix_probs":mix_probs, "beta_prior_b":beta_prior_b, "trans":trans,
-                      "prior_probs":prior_probs, "post_samples":post_samples, "mu_ref":mu_ref, "fit_prior":fit_prior}
+            if fit_interaction:
+                result = {"neut_sfs_full":neut_sfs_full, "beta_neut_full":beta_neut_full, "ref_mu_ii":ref_mu_ii,
+                          "beta_prior_scale":beta_prior_scale, "beta_prior_loc":beta_prior_loc,
+                          "mix_probs":mix_probs, "beta_prior_b":beta_prior_b, "trans":trans,
+                          "prior_probs":prior_probs, "post_samples":post_samples, "mu_ref":mu_ref, "fit_prior":fit_prior}
+            else:
+                result = {"neut_sfs_full":neut_sfs_full, "beta_neut_full":beta_neut_full, "ref_mu_ii":ref_mu_ii,
+                          "beta_prior_scale":beta_prior_scale, "beta_prior_loc":beta_prior_loc,
+                          "mix_probs":mix_probs,"trans":trans,
+                          "prior_probs":prior_probs, "post_samples":post_samples, "mu_ref":mu_ref, "fit_prior":fit_prior}
     else:
-        result = {"neut_sfs_full":neut_sfs_full, "beta_neut_full":beta_neut_full, "ref_mu_ii":ref_mu_ii,
-                  "beta_prior_b":beta_prior_b, "prior_probs":prior_probs, "post_samples":post_samples, "mu_ref":mu_ref,
-                  "fit_prior":fit_prior}
+        if fit_interaction:
+            result = {"neut_sfs_full":neut_sfs_full, "beta_neut_full":beta_neut_full, "ref_mu_ii":ref_mu_ii,
+                      "beta_prior_b":beta_prior_b, "prior_probs":prior_probs, "post_samples":post_samples, "mu_ref":mu_ref,
+                      "fit_prior":fit_prior}
+        else:
+            result = {"neut_sfs_full":neut_sfs_full, "beta_neut_full":beta_neut_full, "ref_mu_ii":ref_mu_ii,
+                      "prior_probs":prior_probs, "post_samples":post_samples, "mu_ref":mu_ref,
+                      "fit_prior":fit_prior}
 
     # calculate the posterior distribution on KL for each gene
-    result = calc_KL_genewise(result)
+    result = calc_KL_genewise(result, fit_interaction)
 
     ## Then calculate the posteriors for covariate betas
     if n_covs > 0:

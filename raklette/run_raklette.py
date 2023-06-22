@@ -55,7 +55,7 @@ class TSVDataset(Dataset):
 ########################################################################################################
 # Main Function
 ########################################################################################################
-def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, output_filename, lr, gamma, fit_prior = True, cov_sigma_prior = torch.tensor(0.1, dtype=torch.float32), gene_col = 2, mu_col = 0, bin_col = 1):
+def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, output_filename, lr, gamma, fit_prior = True, fit_interaction = False, cov_sigma_prior = torch.tensor(0.1, dtype=torch.float32), gene_col = 2, mu_col = 0, bin_col = 1):
     #lr is initial learning rate
 
     print("running raklette", flush=True)
@@ -70,7 +70,7 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
     n_bins = len(neutral_sfs[1]) - 1
     print("number of bins: " + str(n_bins), flush = True)
 
-    KL = raklette_updated.raklette(neutral_sfs, n_bins, mu_ref, n_covs, n_genes, cov_sigma_prior = cov_sigma_prior, fit_prior = fit_prior)
+    KL = raklette_updated.raklette(neutral_sfs, n_bins, mu_ref, n_covs, n_genes, cov_sigma_prior = cov_sigma_prior, fit_prior = fit_prior, fit_interaction = fit_interaction)
     
     if fit_prior == False:
         print("fitting with predefined prior for genes", flush = True)
@@ -118,7 +118,7 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
 
             if batch_idx % 10 == 0:
                 print(batch_idx, flush=True)
-                print(loss, flush=True)
+                print(loss/data.shape[1], flush=True)
 
     model_filename = ".".join(output_filename.split(".")[:-1]) + ".model"
     param_filename = ".".join(output_filename.split(".")[:-1]) + ".params"
@@ -143,7 +143,7 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
 
     ##############################post inference##############################
     
-    result = raklette_updated.post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, cov_sigma_prior = cov_sigma_prior, fit_prior = fit_prior)
+    result = raklette_updated.post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, cov_sigma_prior = cov_sigma_prior, fit_prior = fit_prior, fit_interaction = fit_interaction)
 
     with open(output_filename, 'wb') as f:
         pickle.dump(result, f)
