@@ -338,3 +338,56 @@ def post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, cov_sigma_
     result["fig"] = (fig, ax)
     
     return result
+
+#raklette running covariates only
+class raklette_cov():
+    def __init__(self, neut_sfs_full, n_bins, mu_ref, n_covs, cov_sigma_prior = torch.tensor(0.1, dtype=torch.float32),
+                 ref_mu_ii=-1):
+
+#         mu = torch.unique(mu_vals)             # set of all possible mutation rates
+#         n_mu = len(mu)                         # number of unique mutation rates
+
+        beta_neut_full = multinomial_trans_torch(neut_sfs_full) #neut_sfs_full is the neutral sfs
+        self.beta_neut_full = beta_neut_full
+
+        beta_neut = beta_neut_full[ref_mu_ii,:]
+        self.beta_neut = beta_neut
+
+        self.n_bins = n_bins
+        self.mu_ref = mu_ref
+        self.n_covs = n_covs
+
+        self.cov_sigma_prior = cov_sigma_prior
+
+    def model(self, mu_vals, covariates, sample_sfs=None):
+        '''
+        Run the model for a given dataset, defined by mutation rates, gene_ids, and other covariates
+
+        Parameters
+        ----------
+        mu_vals :
+            The mutation rate for each site being analyzed by the model as a 1D array, proportional to per-generation ideally
+        gene_ids :
+            The gene id for each site being analyzed, categorical variable, give as integers
+        covariates :
+            Matrix of covariates
+        sample_sfs :
+            The observed binned SFS data we are fitting the model to
+
+        '''
+
+        n_sites = len(mu_vals)
+            
+        #beta for covariates
+        # Each covariate has a vector of betas, one for each bin, maybe think about different prior here?
+        with pyro.plate("covariates", self.n_covs):
+            beta_cov = pyro.sample("beta_cov", dist.HalfCauchy(self.cov_sigma_prior).expand([self.n_bins]).to_event(1))
+
+        # calculate the multinomial coefficients for each mutation rate
+        mn_sfs = self.beta_neut_full[None,...]
+        
+        # convert to probabilities per-site and adjust for covariates
+        sfs = softmax(pad(mn_sfs[..., gene_ids, mu_vals, :] - covariates * torch.cumsum(beta_cov, -1)))
+        
+        with pyro.plate("sites", n_sites):
+            pyro.sample("obs", dist.Categorical(sfs), obs=sample_sfs)

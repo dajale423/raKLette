@@ -12,7 +12,7 @@ from torch.utils.data import Dataset, DataLoader
 
 sys.path.insert(0, '/home/djl34/lab_pd/kl/git/KL/raklette')
 
-import raklette_updated
+import raklette
 
 import pickle
 
@@ -70,7 +70,7 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
     n_bins = len(neutral_sfs[1]) - 1
     print("number of bins: " + str(n_bins), flush = True)
 
-    KL = raklette_updated.raklette(neutral_sfs, n_bins, mu_ref, n_covs, n_genes, cov_sigma_prior = cov_sigma_prior, fit_prior = fit_prior, fit_interaction = fit_interaction)
+    KL = raklette.raklette(neutral_sfs, n_bins, mu_ref, n_covs, n_genes, cov_sigma_prior = cov_sigma_prior, fit_prior = fit_prior, fit_interaction = fit_interaction)
     
     if fit_prior == False:
         print("fitting with predefined prior for genes", flush = True)
@@ -143,7 +143,87 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
 
     ##############################post inference##############################
     
-    result = raklette_updated.post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, cov_sigma_prior = cov_sigma_prior, fit_prior = fit_prior, fit_interaction = fit_interaction)
+    result = raklette.post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, cov_sigma_prior = cov_sigma_prior, fit_prior = fit_prior, fit_interaction = fit_interaction)
+
+    with open(output_filename, 'wb') as f:
+        pickle.dump(result, f)
+
+def run_raklette_cov(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, output_filename, lr, gamma, fit_prior = True, fit_interaction = False, cov_sigma_prior = torch.tensor(0.1, dtype=torch.float32), mu_col = 0, bin_col = 1, cov_col = 2):
+    #lr is initial learning rate
+
+    print("running raklette", flush=True)
+
+    # read neutral sfs
+    sfs = pd.read_csv(neutral_sfs_filename, sep = "\t")
+    bin_columns = []
+    for i in range(5):
+        bin_columns.append(str(float(i)))
+    neutral_sfs = torch.tensor(sfs[bin_columns].values)
+    mu_ref = torch.tensor(sfs["mu"].values)
+    n_bins = len(neutral_sfs[1]) - 1
+    print("number of bins: " + str(n_bins), flush = True)
+
+    KL = raklette.raklette_cov(neutral_sfs, n_bins, mu_ref, n_covs, cov_sigma_prior = cov_sigma_prior)
+                
+    model = KL.model
+    guide = pyro.infer.autoguide.AutoNormal(model)
+
+    #run inference
+    pyro.clear_param_store()
+    
+    num_steps = num_epochs * len(loader)
+    lrd = gamma ** (1 / num_steps)
+    
+    # run SVI
+    optimizer = pyro.optim.ClippedAdam({"lr":lr, 'lrd': lrd})
+#     optimizer = pyro.optim.Adam({"lr":lr})
+    elbo = pyro.infer.Trace_ELBO(num_particles=1, vectorize_particles=True)
+    svi = pyro.infer.SVI(model, guide, optimizer, elbo)
+    losses = []
+
+    for epoch in range(num_epochs):
+        print("epoch: " + str(epoch), flush = True)
+
+        # Take a gradient step for each mini-batch in the dataset
+        for batch_idx, data in enumerate(loader):
+#             gene_ids = data[:,:,gene_col].reshape(-1)
+#             gene_ids = gene_ids.type(torch.LongTensor)
+
+            mu_vals = data[:,:,mu_col].reshape(-1)
+            mu_vals = mu_vals.type(torch.LongTensor)
+
+            freq_bins = data[:,:,bin_col].reshape(-1)
+
+            covariate_vals = data[:,:,cov_col:].reshape(-1).unsqueeze(0)
+            covariate_vals = torch.transpose(covariate_vals, 0, 1)
+            covariate_vals = covariate_vals.type(torch.LongTensor)
+
+            loss = svi.step(mu_vals, covariate_vals, freq_bins)
+
+            losses.append(loss/data.shape[1])
+
+            if batch_idx % 10 == 0:
+                print(batch_idx, flush=True)
+                print(loss/data.shape[1], flush=True)
+
+    model_filename = ".".join(output_filename.split(".")[:-1]) + ".model"
+    param_filename = ".".join(output_filename.split(".")[:-1]) + ".params"
+    
+    output_dict = {}
+    output_dict['KL']=KL
+    output_dict['model']=model
+    output_dict['guide']=guide
+    
+    with open(model_filename, 'wb') as handle:
+        pickle.dump(output_dict, handle)
+        
+    pyro.get_param_store().save(param_filename)
+
+    print("Finished training!", flush=True)
+
+    ##############################post inference##############################
+    
+    result = raklette.post_analysis_cov(neutral_sfs, mu_ref, n_bins, n_covs, losses, cov_sigma_prior = cov_sigma_prior)
 
     with open(output_filename, 'wb') as f:
         pickle.dump(result, f)
