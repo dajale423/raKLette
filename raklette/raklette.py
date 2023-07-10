@@ -339,7 +339,7 @@ def post_analysis(neutral_sfs, mu_ref, n_bins, guide, n_covs, losses, cov_sigma_
     
     return result
 
-#raklette running covariates only
+#######################################################raklette running covariates only########################################
 class raklette_cov():
     def __init__(self, neut_sfs_full, n_bins, mu_ref, n_covs, cov_sigma_prior = torch.tensor(0.1, dtype=torch.float32),
                  ref_mu_ii=-1):
@@ -387,7 +387,27 @@ class raklette_cov():
         mn_sfs = self.beta_neut_full[None,...]
         
         # convert to probabilities per-site and adjust for covariates
-        sfs = softmax(pad(mn_sfs[..., gene_ids, mu_vals, :] - covariates * torch.cumsum(beta_cov, -1)))
+        sfs = softmax(pad(mn_sfs[..., mu_vals, :] - covariates * torch.cumsum(beta_cov, -1)))
         
         with pyro.plate("sites", n_sites):
             pyro.sample("obs", dist.Categorical(sfs), obs=sample_sfs)
+            
+def post_analysis_cov(neutral_sfs, mu_ref, n_bins, n_covs, losses, cov_sigma_prior, ref_mu_ii = -1):
+    
+    neut_sfs_full = neutral_sfs
+    
+    beta_neut_full = multinomial_trans_torch(neut_sfs_full) #neut_sfs_full is the neutral sfs
+    # grab gene-DFE prior parameter point estimates
+    beta_neut = beta_neut_full[ref_mu_ii,:]
+    
+    #make result into a dictionary
+    result = {"neut_sfs_full":neut_sfs_full, "beta_neut_full":beta_neut_full, "ref_mu_ii":ref_mu_ii, "cov_sigma_prior":cov_sigma_prior}
+
+#     result["post_beta_cov"] = torch.cumsum(post_samples['beta_cov'], -1)
+    result["losses"] = losses
+    
+    fig, ax = plot_losses(losses)
+    
+    result["fig"] = (fig, ax)
+    
+    return result

@@ -7,6 +7,8 @@ import pyro.distributions as dist
 import pyro.distributions.constraints as constraints
 from pyro.nn import PyroModule
 
+import datetime
+
 from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
 
@@ -148,7 +150,7 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
     with open(output_filename, 'wb') as f:
         pickle.dump(result, f)
 
-def run_raklette_cov(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, output_filename, lr, gamma, fit_prior = True, fit_interaction = False, cov_sigma_prior = torch.tensor(0.1, dtype=torch.float32), mu_col = 0, bin_col = 1, cov_col = 2):
+def run_raklette_cov(loader, n_covs, num_epochs, neutral_sfs_filename, output_filename, lr, gamma, cov_sigma_prior = torch.tensor(0.1, dtype=torch.float32), mu_col = 0, bin_col = 1, cov_col = 2):
     #lr is initial learning rate
 
     print("running raklette", flush=True)
@@ -203,8 +205,11 @@ def run_raklette_cov(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, 
             losses.append(loss/data.shape[1])
 
             if batch_idx % 10 == 0:
-                print(batch_idx, flush=True)
-                print(loss/data.shape[1], flush=True)
+                print("batch: " + str(batch_idx), flush=True)
+                
+                ct = datetime.datetime.now()
+                print("time: " + str(ct), flush=True)
+                print("loss: " + str(loss/data.shape[1]), flush=True)
 
     model_filename = ".".join(output_filename.split(".")[:-1]) + ".model"
     param_filename = ".".join(output_filename.split(".")[:-1]) + ".params"
