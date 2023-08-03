@@ -1,0 +1,28 @@
+import os
+import sys
+sys.path.append('../../Programs/KL/simulation/')
+import torch
+import numpy as np
+import simulation_tools as simt
+
+out_dir = ""
+
+shet_set = np.array([1e-5, 2e-5, 5e-5, 1e-4, 2e-4, 5e-4, 
+                     1e-3, 2e-3, 5e-3, 1e-2, 2e-2, 5e-2,
+                     1e-1, 2e-1, 5e-1])
+
+mu_set = np.array([1e-9, 2e-9, 5e-9, 1e-8, 2e-8, 5e-8, 
+                   1e-7, 2e-7, 5e-7])
+
+rule all:
+    input:
+        expand(os.path.join(out_dir, "sfs_tenn_s_{shet}_mu_{mu}.npy"),
+               shet=shet_set, mu=mu_set)
+
+rule generate_sfs:
+    output:
+        os.path.join(out_dir, "sfs_tenn_s_{shet}_mu_{mu}.npy")
+    run:
+        sfs = simt.tenn_sfs(shet=float(wildcards.shet), mu=float(wildcards.mu))
+        # save as numpy array
+        np.save(output[0], sfs)
