@@ -80,3 +80,260 @@ def tenn_sfs(shet, mu):
         use_condensed=True
     )
     return tenn_sfs
+
+def make_bins(jmin, bb, nn, incl_zero=False):
+    """
+    Make a set of bins for the SFS.
+
+    Parameters
+    ----------
+    jmin : int
+        The minimum bin size.
+    bb : float
+        The bin size multiplier.
+    nn : int
+        The sample size.
+    incl_zero : bool
+        Whether to include a bin for the zero-frequency class.
+
+    Returns
+    -------
+    bins : array_like
+        The set of bins.
+    """
+    bins = np.arange(1, jmin + 1, dtype=int) # starting bins
+    bb_next = bb
+    while bins[-1] > bb_next: # catch up past starting bins
+        bb_next *= bb
+    bb_next = math.ceil(bb_next) if math.floor(bb_next)<=bins[-1] else math.floor(bb_next)
+    bins = np.append(bins, bb_next)
+    while bins[-1] < nn/2:
+        bb_next *= bb
+        bb_next = math.ceil(bb_next) if math.floor(bb_next)==bins[-1] else math.floor(bb_next)
+        bins = np.append(bins, bb_next)
+    bins = np.concatenate((bins[:-1], [math.ceil(nn/2), nn]))
+    if incl_zero:
+        bins = np.concatenate(([0], bins))
+    return bins
+
+def bin_means(bins):
+    """
+    Compute bin means as the mean allele count within each bin.
+
+    Parameters
+    ----------
+    bins : array_like
+        The set of bins.
+
+    Returns
+    -------
+    result : array_like
+        The bin means.
+    """
+    result = np.zeros(len(bins)-1)
+    for ii in range(1, len(bins)):
+        result[ii-1] = np.mean(np.arange(bins[ii-1], bins[ii]))
+    return result
+
+def bin_sizes(bins):
+    """
+    Compute bin sizes as the number of allele counts within each bin.
+    
+    Parameters
+    ----------
+    bins : array_like
+        The set of bins.
+
+    Returns
+    -------
+    result : array_like
+        The bin sizes.
+    """
+    result = np.zeros(len(bins)-1)
+    for ii in range(1, len(bins)):
+        result[ii-1] = bins[ii] - bins[ii-1]
+    return result
+
+def multinomial_trans(sfs_probs, offset=None):
+    """
+    Convert a set of SFS probabilities to multinomial coefficients.
+
+    Parameters
+    ----------
+    sfs_probs : array_like
+        The SFS probabilities. Last dimension should be a probability distribution
+        over the allele count classes.
+    offset : array_like
+        The neutral offset to subtract from each SFS probability. If None, no offset
+        is subtracted.
+
+    Returns
+    -------
+    betas : array_like
+        The multinomial coefficients.
+    """
+    sfs_probs = np.array(sfs_probs)
+    P_0 = sfs_probs[...,0]
+    if offset:
+        betas = np.log(sfs_probs[...,1:]) - np.log(P_0[...,None]) - offset
+    else:
+        betas = np.log(sfs_probs[...,1:]) - np.log(P_0[...,None])
+    return betas
+
+class simPile:
+    """
+    A class for storing and using SFS simulations over a grid of selection
+    coefficients and mutation rates.
+    """
+    def __init__(self, sfs_set, mu_set, shet_set):
+        """
+        Initialize the simPile object.
+
+        Parameters
+        ----------
+        sfs_set : array_like
+            The SFS for each selection coefficient and mutation rate in the grid.
+            (n_m x n_s x n_k) array. This is written with the output of fastDTWF
+            in mind, so n_k should be 2*N, where N is the sample or population
+            size and the first entry is the zero-frequency class. We do not include 
+            the fixed class in the SFS. We check this by veryfying that n_k is even.
+            We will normalize in case the provided SFS is not a probability distribution.
+        mu_set : array_like
+            The mutation rates for each simulation in the grid.
+            (n_m) array.
+        shet_set : array_like
+            The selection coefficients for each simulation in the grid.
+            (n_s) array.
+        """
+
+        self.sfs_set = sfs_set
+        self.shet_set = shet_set
+        self.mu_set = mu_set
+        self.n_m, self.n_s, self.n_k = self.sfs_set.shape
+        self.ac_set = np.arange(0, self.n_k) # allele count set
+
+        # verify that the shapes of the input arrays are consistent
+        assert self.n_m == len(self.mu_set)
+        assert self.n_s == len(self.shet_set)
+
+        # verify that the SFS has an even number of bins
+        # meaning it is zero-inclusive and does not include the fixed class
+        assert self.n_k % 2 == 0
+
+        # normalize the SFS
+        self.sfs_set /= np.sum(self.sfs_set, axis=2)[:,:,None]
+
+        # check if there is a neutral simulation
+        self.has_neutral = np.sum(self.shet_set==0) > 0
+        # get the index of the neutral simulation
+        self.neutral_index = np.where(self.shet_set==0)[0][0] if self.has_neutral else None
+
+        self.binned_sfs = None
+        self.bins = None
+        self.bin_means = None
+        self.bin_sizes = None
+
+        self.neutral_betas = None
+        self.betas = None
+
+        self.neutral_betas_binned = None
+        self.betas_binned = None
+
+        def get_neutral_betas(self, bin=False):
+            """
+            Get the multinomial coefficients for neutral simulations at each mutation rate.
+
+            Returns
+            -------
+            neutral_betas : array_like
+                The multinomial coefficients for neutral simulations at each mutation rate.
+                (n_m x n_k-1) array.
+            """
+            if not self.has_neutral:
+                raise ValueError("No neutral simulation in the set.")
+            if bin:
+                # check if the SFS has been binned
+                if not self.binned_sfs:
+                    raise ValueError("SFS has not been binned.")
+                neutral_betas = multinomial_trans(self.binned_sfs[:,self.neutral_index,:], offset=None)
+                self.neutral_betas_binned = neutral_betas
+            else:
+                neutral_betas = multinomial_trans(self.sfs_set[:,self.neutral_index,:], offset=None)
+                self.neutral_betas = neutral_betas
+            return neutral_betas
+
+        def get_betas(self, bin=False):
+            """
+            Get the multinomial coefficients for each selection coefficient at each mutation rate.
+
+            Returns
+            -------
+            betas : array_like
+                The multinomial coefficients for each selection coefficient at each mutation rate.
+                (n_m x n_s x n_k-1) array.
+            """
+            if bin:
+                # check if the SFS has been binned
+                if not self.binned_sfs:
+                    raise ValueError("SFS has not been binned.")
+                if not self.neutral_betas_binned:
+                    neutral_betas = self.get_neutral_betas(bin=True)
+                else:
+                    neutral_betas = self.neutral_betas_binned
+                betas = multinomial_trans(self.binned_sfs, offset=neutral_betas[:,None,:])
+                self.betas_binned = betas
+            else:
+                if not self.neutral_betas:
+                    neutral_betas = self.get_neutral_betas()
+                else:
+                    neutral_betas = self.neutral_betas
+                betas = multinomial_trans(self.sfs_set, offset=neutral_betas[:,None,:])
+                self.betas = betas
+            return betas            
+
+        def bin_sfs(self, jmin, bb, incl_zero=True):
+            """
+            Bin the SFS.
+
+            Parameters
+            ----------
+            jmin : int
+                The minimum bin size.
+            bb : float
+                The bin size multiplier.
+            incl_zero : bool
+                Whether to include a bin for the zero-frequency class.
+
+            Returns
+            -------
+            binned_sfs : array_like
+                The binned SFS as a probability distribution.
+            """
+            # make the bins
+            bins = make_bins(jmin, bb, self.n_k, incl_zero)
+
+            # initialize the binned SFS
+            binned_sfs = np.zeros((self.n_m, self.n_s, len(bins)-1))
+
+            if not incl_zero:
+                range = (1, self.n_k)
+            else:
+                range = (0, self.n_k)
+
+            # bin the SFS
+            for i in range(self.n_m):
+                for j in range(self.n_s):
+                    binned_sfs[i,j] = np.histogram(np.arange(0, self.n_k), bins=bins, 
+                                                   weights=self.sfs_set[i,j], range=range)[0]
+
+            # normalize the binned SFS to be a probability distribution in case zero-frequency class is excluded
+            if not incl_zero:
+                binned_sfs /= np.sum(binned_sfs, axis=2)[:,:,None]
+            
+            self.binned_sfs = binned_sfs
+            self.bins = bins
+            self.bin_means = bin_means(bins)
+            self.bin_sizes = bin_sizes(bins)
+
+            return binned_sfs
+        
