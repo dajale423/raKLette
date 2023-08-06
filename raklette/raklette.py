@@ -367,8 +367,6 @@ class raklette_cov():
         ----------
         mu_vals :
             The mutation rate for each site being analyzed by the model as a 1D array, proportional to per-generation ideally
-        gene_ids :
-            The gene id for each site being analyzed, categorical variable, give as integers
         covariates :
             Matrix of covariates
         sample_sfs :
@@ -382,12 +380,16 @@ class raklette_cov():
         # Each covariate has a vector of betas, one for each bin, maybe think about different prior here?
         with pyro.plate("covariates", self.n_covs):
             beta_cov = pyro.sample("beta_cov", dist.HalfCauchy(self.cov_sigma_prior).expand([self.n_bins]).to_event(1))
+            
+#         print(beta_cov)
+            
+        beta_cov_trans = torch.cumsum(beta_cov, dim=-1)
 
         # calculate the multinomial coefficients for each mutation rate
         mn_sfs = self.beta_neut_full[None,...]
         
         # convert to probabilities per-site and adjust for covariates
-        sfs = softmax(pad(mn_sfs[..., mu_vals, :] - covariates * torch.cumsum(beta_cov, -1)))
+        sfs = softmax(pad(mn_sfs[..., mu_vals, :] - torch.matmul(covariates, beta_cov_trans)))
         
         with pyro.plate("sites", n_sites):
             pyro.sample("obs", dist.Categorical(sfs), obs=sample_sfs)
