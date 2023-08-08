@@ -1,4 +1,6 @@
-# KL
+## raKLette
+
+`preprocessing` directory includes workflow to process data.
 
 run_raklette.py uses function from raklette_updated.py
 
