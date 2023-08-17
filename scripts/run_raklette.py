@@ -115,11 +115,12 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
                 covariate_vals = covariate_vals.type(torch.LongTensor)
 
                 loss = svi.step(mu_vals, gene_ids, covariate_vals, freq_bins)
-
-            losses.append(loss/data.shape[1])
+                
+            if data.shape[1] > 1000:
+                losses.append(loss/data.shape[1])
 
             if batch_idx % 10 == 0:
-                print(batch_idx, flush=True)
+                print("\t" + str(batch_idx), flush=True)
                 print(loss/data.shape[1], flush=True)
 
     model_filename = ".".join(output_filename.split(".")[:-1]) + ".model"
@@ -196,20 +197,23 @@ def run_raklette_cov(loader, n_covs, num_epochs, neutral_sfs_filename, output_fi
 
             freq_bins = data[:,:,bin_col].reshape(-1)
 
-            covariate_vals = data[:,:,cov_col:].reshape(-1).unsqueeze(0)
-            covariate_vals = torch.transpose(covariate_vals, 0, 1)
-            covariate_vals = covariate_vals.type(torch.LongTensor)
-
+            if n_covs == 1:
+                covariate_vals = torch.squeeze(data[:,:,cov_col:]).unsqueeze(-1)
+            else:
+                covariate_vals = torch.squeeze(data[:,:,cov_col:])
+                
+            covariate_vals = covariate_vals.type(torch.FloatTensor)
+    
             loss = svi.step(mu_vals, covariate_vals, freq_bins)
 
             losses.append(loss/data.shape[1])
 
             if batch_idx % 10 == 0:
-                print("batch: " + str(batch_idx), flush=True)
+                print("\t batch: " + str(batch_idx), flush=True)
                 
                 ct = datetime.datetime.now()
-                print("time: " + str(ct), flush=True)
-                print("loss: " + str(loss/data.shape[1]), flush=True)
+                print("\t time: " + str(ct), flush=True)
+                print("\t loss: " + str(loss/data.shape[1]), flush=True)
 
     model_filename = ".".join(output_filename.split(".")[:-1]) + ".model"
     param_filename = ".".join(output_filename.split(".")[:-1]) + ".params"
