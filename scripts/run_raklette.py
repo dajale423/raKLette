@@ -8,11 +8,12 @@ import pyro.distributions.constraints as constraints
 from pyro.nn import PyroModule
 
 import datetime
+import time
 
 from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
 
-sys.path.insert(0, '/home/djl34/lab_pd/kl/git/KL/raklette')
+sys.path.insert(0, '/home/djl34/lab_pd/kl/git/KL/scripts')
 
 import raklette
 
@@ -23,6 +24,37 @@ KL_data_dir = "/home/djl34/lab_pd/kl/data"
 ########################################################################################################
 # Create Dataset
 ########################################################################################################
+# class TSVDataset(Dataset):
+#     def __init__(self, path, chunksize, nb_samples, header_all, features):
+#         self.path = path
+#         self.chunksize = chunksize
+        
+#         if nb_samples % self.chunksize == 0:
+#             self.len = nb_samples // self.chunksize
+#         else:
+#             self.len = nb_samples // self.chunksize + 1
+        
+#         self.header = header_all
+#         self.features = features
+
+#     def __getitem__(self, index):
+#         x = next(
+#             pd.read_csv(
+#                 self.path,
+#                 sep = "\t",
+#                 skiprows=index * self.chunksize + 1,  #+1, since we skip the header
+#                 chunksize=self.chunksize,
+#                 names=self.header))
+
+#         x = x[self.features]
+#         x = x.astype(float)
+#         x = torch.from_numpy(x.values)
+#         return x
+
+#     def __len__(self):
+#         return self.len
+    
+    
 class TSVDataset(Dataset):
     def __init__(self, path, chunksize, nb_samples, header_all, features):
         self.path = path
@@ -37,14 +69,8 @@ class TSVDataset(Dataset):
         self.features = features
 
     def __getitem__(self, index):
-        x = next(
-            pd.read_csv(
-                self.path,
-                sep = "\t",
-                skiprows=index * self.chunksize + 1,  #+1, since we skip the header
-                chunksize=self.chunksize,
-                names=self.header))
-
+        x = pd.read_csv(self.path + "chunk_" + str(self.chunksize) + "_" + str(index) + ".tsv",
+                sep = "\t", names=self.header, skiprows=1)
         x = x[self.features]
         x = x.astype(float)
         x = torch.from_numpy(x.values)
@@ -159,7 +185,7 @@ def run_raklette_cov(loader, n_covs, num_epochs, neutral_sfs_filename, output_fi
     # read neutral sfs
     sfs = pd.read_csv(neutral_sfs_filename, sep = "\t")
     bin_columns = []
-    for i in range(5):
+    for i in range(len(sfs.columns) - 2):
         bin_columns.append(str(float(i)))
     neutral_sfs = torch.tensor(sfs[bin_columns].values)
     mu_ref = torch.tensor(sfs["mu"].values)
@@ -183,14 +209,22 @@ def run_raklette_cov(loader, n_covs, num_epochs, neutral_sfs_filename, output_fi
     elbo = pyro.infer.Trace_ELBO(num_particles=1, vectorize_particles=True)
     svi = pyro.infer.SVI(model, guide, optimizer, elbo)
     losses = []
+    
+    start = time.time()
+    divide_by = 1
 
     for epoch in range(num_epochs):
         print("epoch: " + str(epoch), flush = True)
 
         # Take a gradient step for each mini-batch in the dataset
         for batch_idx, data in enumerate(loader):
-#             gene_ids = data[:,:,gene_col].reshape(-1)
-#             gene_ids = gene_ids.type(torch.LongTensor)
+            if batch_idx % divide_by == 0:
+                print("\t batch: " + str(batch_idx), flush = True)
+                end = time.time()
+                print("\t\t time from last batch: " + str(end - start), flush = True)
+                start = time.time()
+                
+            ## changing values into tensor format
 
             mu_vals = data[:,:,mu_col].reshape(-1)
             mu_vals = mu_vals.type(torch.LongTensor)
@@ -203,17 +237,28 @@ def run_raklette_cov(loader, n_covs, num_epochs, neutral_sfs_filename, output_fi
                 covariate_vals = torch.squeeze(data[:,:,cov_col:])
                 
             covariate_vals = covariate_vals.type(torch.FloatTensor)
+
+            if batch_idx % divide_by == 0:
+                end = time.time()
+                print("\t\t time to get tensors: " + str(end - start), flush = True)
+                start = time.time()
     
             loss = svi.step(mu_vals, covariate_vals, freq_bins)
+        
+            if batch_idx % divide_by == 0:
+                end = time.time()
+                print("\t\t time to get run svi step: " + str(end - start), flush = True)
+                start = time.time()
 
             losses.append(loss/data.shape[1])
+            
+            if batch_idx % divide_by == 0:
+                end = time.time()
+                print("\t\t time to append loss: " + str(end - start), flush = True)
+                start = time.time()
 
-            if batch_idx % 10 == 0:
-                print("\t batch: " + str(batch_idx), flush=True)
-                
-                ct = datetime.datetime.now()
-                print("\t time: " + str(ct), flush=True)
-                print("\t loss: " + str(loss/data.shape[1]), flush=True)
+            if batch_idx % divide_by == 0:
+                print("\t\t loss: " + str(loss/data.shape[1]), flush=True)
 
     model_filename = ".".join(output_filename.split(".")[:-1]) + ".model"
     param_filename = ".".join(output_filename.split(".")[:-1]) + ".params"

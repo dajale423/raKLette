@@ -373,7 +373,6 @@ class raklette_cov():
             The observed binned SFS data we are fitting the model to
 
         '''
-
         n_sites = len(mu_vals)
             
         #beta for covariates
