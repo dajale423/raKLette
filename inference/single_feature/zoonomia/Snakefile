@@ -42,13 +42,14 @@ base_set = ["A", "C", "T", "G"]
 all_chrom_set = [str(x) for x in range(1, 23)]
 even_chrom_set = [str(2 * x) for x in range(1, 12)]
 # chrom_set = even_chrom_set
-chrom_set = ["2"]
-# chrom_set = ["-2"]
+# chrom_set = ["2"]
+chrom_set = ["-2"]
 
 # cutoff_list = [0, 1, 2, 3, 4, 5]
 
 wildcard_constraints:
-    chrom="[-+]?\d+",
+    chrom="\d+",
+    chrom_all="[-+]?\d+",
     epoch="\d+",
     interval_min="[+-]?([0-9]*[.])?[0-9]+",
     interval_max="[+-]?([0-9]*[.])?[0-9]+",
@@ -84,7 +85,7 @@ rule all:
 #         [os.path.join(scratch_dir, "kl_input/" + file_directory + "gene_edges_"+ interval +"_only_" + chrom + ".tsv") for chrom in chrom_set for interval in interval_list],
 #         [os.path.join(KL_data_dir, "raklette_output/" + file_directory + "gene_edges_"+ interval +"_only_" + chrom + "_sample_100000000_covonly_lr_0.01_gamma_0.5_chunksize_100000_epoch_5_covprior_0.1.pkl") for chrom in chrom_set for interval in interval_list],
 ## for covariates
-        [os.path.join(KL_data_dir, "raklette_output/" + file_directory + "phyloP_phylo6_" + chrom + "_covonly_lr_0.01_gamma_0.5_chunksize_100000_epoch_1_covprior_0.1.pkl") for chrom in chrom_set],
+        [os.path.join(KL_data_dir, "raklette_output/" + file_directory + "phyloP_phyloPsq_phylo6_chr_" + chrom + "_chunksize_1000000_covonly_lr_0.01_gamma_0.5_epoch_1_covprior_0.1.pkl") for chrom in chrom_set],
 
 ########################################## zoonomia genes ##############################################
 
@@ -115,29 +116,29 @@ rule make_tsv_files:
 
             rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
                 
-rule make_tsv_files_even:
-    input:
-        [os.path.join(scratch_dir, "kl_input/" + file_directory + chrom + ".tsv") for chrom in even_chrom_set]
-    output:
-        os.path.join(scratch_dir, "kl_input/" + file_directory + "-2.tsv")
-    resources:
-        partition="short",
-        runtime="0-12:00",
-        cpus_per_task=5,
-        mem_mb=25000
-    run:
-        with Client() as client:
+# rule make_tsv_files_even:
+#     input:
+#         [os.path.join(scratch_dir, "kl_input/" + file_directory + chrom + ".tsv") for chrom in even_chrom_set]
+#     output:
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "-2.tsv")
+#     resources:
+#         partition="short",
+#         runtime="0-12:00",
+#         cpus_per_task=5,
+#         mem_mb=25000
+#     run:
+#         with Client() as client:
 
-            rate = dd.read_csv(input, sep = "\t")
+#             rate = dd.read_csv(input, sep = "\t")
 
-            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+#             rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
             
             
 rule make_phyloP6:
     input:
         os.path.join(scratch_dir, "kl_input/" + file_directory + "{chrom}.tsv")
     output:
-        os.path.join(scratch_dir, "kl_input/" + file_directory + "phyloP_phylo6_{chrom}.tsv")
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "phyloP_phylo6_chr_{chrom}.tsv")
     resources:
         partition="short",
         runtime="0-12:00",
@@ -164,7 +165,7 @@ rule make_phyloPsq_phyloP6:
     input:
         os.path.join(scratch_dir, "kl_input/" + file_directory + "{chrom}.tsv")
     output:
-        os.path.join(scratch_dir, "kl_input/" + file_directory + "phyloP_phyloPsq_phylo6_{chrom}.tsv")
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "phyloP_phyloPsq_phylo6_chr_{chrom}.tsv")
     resources:
         partition="short",
         runtime="0-12:00",
@@ -179,11 +180,8 @@ rule make_phyloPsq_phyloP6:
 
             include_columns = ["mu_index", "Freq_bin", "phyloP", "phyloP^2", "phyloP6"]
             
-            rate["phyloP6"] = rate["phyloP"].where((rate["phyloP"] >= 6.0) & (rate["phyloP"] < 6.4), 0)
+            rate["phyloP6"] = rate["phyloP"].where((rate["phyloP"] >= 6.0/8.903) & (rate["phyloP"] < 6.4/8.903), 0)
             rate["phyloP6"] = rate["phyloP6"].astype(bool).astype(int)
-            
-            rate["phyloP"] = rate["phyloP"]/8.903
-            
             rate["phyloP^2"] = rate["phyloP"] ** 2
 
             rate = rate[include_columns]
@@ -194,7 +192,7 @@ rule zoonomia_make_genes_interval_by_edges_only:
     input:
         os.path.join(scratch_dir, "kl_input/" + file_directory + "{chrom}.tsv")
     output:
-        os.path.join(scratch_dir, "kl_input/" + file_directory + "gene_edges_{interval_min}_{interval_max}_only_{chrom}.tsv")
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "gene_edges_{interval_min}_{interval_max}_only_chr_{chrom}.tsv")
     resources:
         partition="short",
         runtime="0-12:00",
@@ -225,26 +223,6 @@ rule zoonomia_make_genes_interval_by_edges_only:
 
             rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
             
-rule zoonomia_make_tsv_files_cutoff:
-    input:
-        os.path.join(scratch_dir, "whole_genome/phylop/{chrom}/_metadata")
-    output:
-        os.path.join(scratch_dir, "kl_input/" + file_directory + "zoonomia_cutoff_{cutoff}_{chrom}.tsv")
-    run:
-        with Client() as client:
-
-            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
-
-            print(rate.columns)
-
-            include_columns = ["mu_index", "Freq_bin", "phyloP"]
-
-            rate = rate[include_columns]
-            
-            rate["phyloP"] = rate["phyloP"].where(rate["phyloP"] > float(wildcards.cutoff), 0)
-            
-            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
-
 ##############################################################################################################################
 # rule sort:
 #     input:
@@ -284,42 +262,18 @@ rule sample_size:
             
             shell("head -n {head_value} {output.first} >> {output.second}")
                         
-                
-rule get_length:
+             
+            
+rule make_chunks:
     input:
-        os.path.join(scratch_dir, "kl_input/"+ file_directory +"{header}.tsv")
+        os.path.join(scratch_dir, "kl_input/"+ file_directory +"{header}_chr_{chrom}.tsv")
     output:
-        os.path.join(scratch_dir, "kl_input/"+ file_directory +"{header}_length.tsv"),
+        os.path.join(scratch_dir, "kl_input/"+ file_directory +"{header}_chr_{chrom}/chunk_{chunksize}_0.tsv")
     resources:
         partition="short",
         runtime="0-12:00",
         cpus_per_task=1,
-        mem_mb=2000
-    run:
-        with Client() as client:
-            rate = dd.read_csv(input[0], sep = "\t")
-            
-            length = len(rate)
-            column_length = len(rate.columns)
-            
-            f = open(output[0], "w")
-            
-            f.write(str(length) + "\n")
-            f.write(str(column_length) + "\n")
-            
-            f.close()
-            
-            
-rule make_chunks:
-    input:
-        os.path.join(scratch_dir, "kl_input/"+ file_directory +"{header}.tsv")
-    output:
-        os.path.join(scratch_dir, "kl_input/"+ file_directory +"{header}/chunk_{chunksize}_0.tsv")
-    resources:
-        partition="short",
-        runtime="0-12:00",
-        cpus_per_task=5,
-        mem_mb=10000
+        mem_mb=5000
     run:
         #remove previous files
         header = "_".join(output[0].split("_")[:-1])
@@ -343,19 +297,76 @@ rule make_chunks:
                 print(iterator)
                 chunk.to_csv(output_dir + "/chunk_" + str(chunksize) + "_" + str(iterator) + ".tsv", sep = "\t", index = None)
                 iterator += 1
-           
-                
+
+rule make_tsv_files_even:
+    input:
+        [os.path.join(scratch_dir, "kl_input/" + file_directory + "{header}_chr_" + chrom + "/chunk_{chunksize}_0.tsv") for chrom in even_chrom_set]
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "{header}_chr_-2/chunk_{chunksize}_0.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        #remove previous files
+        header = "_".join(output[0].split("_")[:-1])
+        header = header + "*.tsv"
+        try:
+            shell("rm " + header)
+        except:
+            print("no file")
+        print("removing " + header)
+        
+        output_dir = "/".join(output[0].split("/")[:-1])
+        iterator = 0
+        
+        for filename in input:
+            file_list = glob.glob("_".join(filename.split("_")[:-1]) + "_*.tsv")
+            
+            for file in file_list:
+                rate = pd.read_csv(file, sep = "\t")
+            
+                rate.to_csv(output_dir + "/chunk_" + str(wildcards.chunksize) + "_" + str(iterator) + ".tsv", sep = "\t", index = None)
+                iterator += 1
+            
+rule get_length:
+    input:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "{header}_chr_{chrom_all}/chunk_{chunksize}_0.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/"+ file_directory +"{header}_chr_{chrom_all}_chunk_{chunksize}_length.tsv"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=4,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            input_filename = "_".join(input[0].split("_")[:-1]) + "_*.tsv"
+            
+            rate = dd.read_csv(input_filename, sep = "\t")
+            
+            length = len(rate)
+            column_length = len(rate.columns)
+            
+            f = open(output[0], "w")
+            
+            f.write(str(length) + "\n")
+            f.write(str(column_length) + "\n")
+            
+            f.close()     
 ########################################## For running KL analysis #####################################
         
 rule run_KL_cov:
     input:
-        variants = os.path.join(scratch_dir, "kl_input/" + file_directory + "{header}/chunk_{chunksize}_0.tsv"),
-        length_file = os.path.join(scratch_dir, "kl_input/" + file_directory +"{header}_length.tsv"),
+        variants = os.path.join(scratch_dir, "kl_input/" + file_directory + "{header}_chr_{chrom_all}/chunk_{chunksize}_0.tsv"),
+        length_file = os.path.join(scratch_dir, "kl_input/" + file_directory +"{header}_chr_{chrom_all}_chunk_{chunksize}_length.tsv"),
         neutral_sfs = os.path.join(KL_data_dir, "whole_genome/allele_freq/adaptive_bins/all.tsv"),
 #         neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all.tsv",
 #         neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all_original.tsv"
     output:
-        os.path.join(KL_data_dir, "raklette_output/"+ file_directory +"{header}_covonly_lr_{learning_rate}_gamma_{gamma}_chunksize_{chunksize}_epoch_{epoch}_covprior_{cov_prior}.pkl")
+        os.path.join(KL_data_dir, "raklette_output/"+ file_directory +"{header}_chr_{chrom_all}_chunksize_{chunksize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}.pkl")
     resources:
         partition="short",
         runtime="0-12:00",
