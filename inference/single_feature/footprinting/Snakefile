@@ -1,0 +1,556 @@
+import os
+import sys
+import glob
+import numpy as np
+import pandas as pd
+import math
+import sys
+import random
+import pickle
+import csv
+
+import dask.dataframe as dd
+from dask.distributed import Client
+
+import torch
+import pyro
+import pyro.distributions as dist
+import pyro.distributions.constraints as constraints
+from pyro.nn import PyroModule
+
+from tqdm import tqdm
+from torch.utils.data import Dataset, DataLoader
+
+sys.path.insert(0, '/home/djl34/lab_pd/kl/git/KL/scripts')
+import raklette
+from run_raklette import run_raklette
+from run_raklette import run_raklette_cov
+from run_raklette import TSVDataset
+
+sys.path.insert(0, '/home/djl34/lab_pd/simulator/code')
+from others import round_sig
+
+def get_mem_mb(wildcards, attempt):
+    return attempt * 30000
+
+###################################################################################################################
+
+KL_data_dir = "/home/djl34/lab_pd/kl/data"
+scratch_dir = "/n/scratch3/users/d/djl34"
+
+base_set = ["A", "C", "T", "G"]
+chrom_set = [str(x) for x in range(1, 23)]
+# chrom_set = ["2"]
+chrom_set = ["-2"]
+
+even_chrom_set = [str(2 * x) for x in range(1, 12)]
+# chrom_set = even_chrom_set
+
+# cutoff_list = [0, 1, 2, 3, 4, 5]
+
+wildcard_constraints:
+    chrom="\d+",
+    chrom_all="[-+]?\d+",
+    epoch="\d+",
+    interval_min="[+-]?([0-9]*[.])?[0-9]+",
+    interval_max="[+-]?([0-9]*[.])?[0-9]+",
+    samplesize="\d+",
+
+file_directory = "single_feature/footprints/"
+
+###################################################################################################################
+interval_list = []
+interval_list = ["0.0_100.0", "0.0_1.0", "15.0_100.0"]
+
+sample_interval_list = ["0_100", "100_200", "200_300", "300_400", "400_500", "500_600", "600_700", "700_750"]
+print(interval_list)
+
+dhs_list = ["dhs", "dhs_core"]
+
+rule all:
+    input:
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "footprints_dhs_chr_22.tsv"),
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "footprints_dhs_gene_chr_22.tsv"),
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "footprints_dhs_gene_chr_-2/chunk_100000_0.tsv")
+        [os.path.join(KL_data_dir, "raklette_output/" + file_directory + "dhs_only_gene_sample_100000000_chr_" + chrom + "_chunksize_100000_covonly_lr_0.01_gamma_0.5_epoch_1_covprior_0.1.pkl") for chrom in chrom_set],
+        [os.path.join(KL_data_dir, "raklette_output/" + file_directory + "footprints_gene_sample_100000000_chr_" + chrom + "_chunksize_100000_covonly_lr_0.01_gamma_0.5_epoch_1_covprior_0.1.pkl") for chrom in chrom_set],
+#         [os.path.join(KL_data_dir, "raklette_output/" + file_directory + dhs + "_signal_" + str(interval) + "_chr_" + chrom + "_sample_10000000" + "_covonly_lr_0.01_gamma_0.5_chunksize_100000_epoch_10_covprior_0.1.pkl") for dhs in dhs_list for chrom in chrom_set for interval in interval_list],
+#         [os.path.join(KL_data_dir, "raklette_output/" + file_directory + dhs + "_signal_" + str(interval) + "_sample_" + str(sample_interval) + "_chr_" + chrom + "_sample_10000000" + "_covonly_lr_0.01_gamma_0.5_chunksize_100000_epoch_10_covprior_0.1.pkl") for dhs in dhs_list for chrom in chrom_set for interval in interval_list for sample_interval in sample_interval_list],
+#         [os.path.join(KL_data_dir, "raklette_output/" + file_directory + "dhs_covariates_" + chrom  + "_covonly_lr_0.01_gamma_0.5_chunksize_10000_epoch_1_covprior_0.1.pkl") for chrom in chrom_set for interval in interval_list],
+
+        
+########################################## getting column of interest ##############################################
+
+rule make_tsv_file:
+    input:
+        os.path.join(scratch_dir, "whole_genome/footprints/{chrom}/_metadata")
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "footprints_dhs_chr_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+
+            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+
+            print(rate.columns)
+
+            include_columns = ["mu_index", "Freq_bin_adaptive"]
+            feature_list = ["footprint_mean_signal", "footprint_samples", "footprint_motif_clusters", "DHS_mean_signal", "DHS_sample", "DHS_tissue"]
+            include_columns.extend(feature_list)
+
+            for feature in feature_list:
+                rate[feature] = rate[feature].fillna(0)
+                
+            rate = rate[include_columns]
+            
+            rate = rate.rename(columns={"Freq_bin_adaptive": "Freq_bin"})  
+            
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+            
+         
+        
+        
+#         os.path.join(scratch_dir, "kl_input/"+ file_directory +"{header}_chr_{chrom}.tsv")
+#     output:
+#         os.path.join(scratch_dir, "kl_input/"+ file_directory +"{header}_chr_{chrom}/chunk_{chunksize}_0.tsv")
+
+rule dhs_only_gene:
+    input:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "footprints_dhs_chr_{chrom}.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "dhs_only_gene_chr_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+
+            rate = dd.read_csv(input[0], sep = "\t", dtype={'footprint_motif_clusters': 'object', 'DHS_tissue': 'object'})
+            
+            rate["dhs_only"] = rate["DHS_mean_signal"].where((rate["DHS_mean_signal"] > 0) & (rate["footprint_mean_signal"] == 0), 0)
+
+            cov_columns = ["dhs_only"]
+            include_columns = ["mu_index", "Freq_bin"]
+            include_columns.extend(cov_columns)
+
+            rate = rate[include_columns]
+
+            for column in cov_columns:
+                rate[column] = rate[column].astype(bool).astype(int)
+
+            rate = rate[rate[cov_columns[0]] == 1]
+
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+            
+rule footprints_only_gene:
+    input:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "footprints_dhs_chr_{chrom}.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "footprints_gene_chr_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+
+            rate = dd.read_csv(input[0], sep = "\t", dtype={'footprint_motif_clusters': 'object', 'DHS_tissue': 'object'})
+            
+            rate["footprints"] = rate["footprint_mean_signal"].astype(bool).astype(int)
+            
+            cov_columns = ["footprints"]
+            include_columns = ["mu_index", "Freq_bin"]
+            include_columns.extend(cov_columns)
+
+            rate = rate[include_columns]
+
+            for column in cov_columns:
+                rate[column] = rate[column].astype(bool).astype(int)
+
+            rate = rate[rate[cov_columns[0]] == 1]
+
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+                        
+rule make_dhs_fp_gene:
+    input:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "footprints_dhs_chr_{chrom}.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "footprints_dhs_gene_chr_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+
+            df = pd.read_csv(input[0], sep = "\t", chunksize=1000000)
+            
+            first = True
+            
+            for rate in df:            
+                rate["footprint"] = rate["footprint_mean_signal"].where((rate["footprint_mean_signal"] > 0), 0)
+                rate["dhs"] = rate["DHS_mean_signal"].where((rate["DHS_mean_signal"] > 0), 0)
+                rate["footprint_dhs"] = rate["footprint_mean_signal"].where((rate["footprint_mean_signal"] > 0) & (rate["DHS_mean_signal"] > 0), 0)
+                rate["footprint_only"] = rate["footprint_mean_signal"].where((rate["footprint_mean_signal"] > 0) & (rate["DHS_mean_signal"] == 0), 0)
+                rate["dhs_only"] = rate["footprint_mean_signal"].where((rate["DHS_mean_signal"] > 0) & (rate["footprint_mean_signal"] == 0), 0)
+
+                cov_columns = ["footprint", "dhs", "footprint_dhs", "footprint_only", "dhs_only"]
+                include_columns = ["mu_index", "Freq_bin"]
+                include_columns.extend(cov_columns)
+
+                rate = rate[include_columns]
+
+                for column in cov_columns:
+                    rate[column] = rate[column].astype(bool).astype(int)
+
+                for column in cov_columns:
+                    rate_gene = rate.copy()
+                    rate_gene = rate_gene[rate_gene[column] == 1]
+
+                    for j in cov_columns:
+                        if column != j:
+                            rate_gene[j] = 0
+
+                    if first:
+                        rate_gene.to_csv(output[0], sep = "\t", index = None)
+                        first = False
+                    else:
+                        rate_gene.to_csv(output[0], sep = "\t", index = None, mode = 'a', header=False)
+                
+# rule make_genes_interval_by_mean_signal_only:
+#     input:
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "dhs_{chrom}.tsv")
+#     output:
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "{header}_signal_{interval_min}_{interval_max}_chr_{chrom}.tsv")
+#     resources:
+#         partition="short",
+#         runtime="0-12:00",
+#         cpus_per_task=5,
+#         mem_mb=25000
+#     run:
+#         with Client() as client:
+            
+#             if wildcards.header == "dhs":
+#                 cov_name = "DHS_mean_signal"
+#             elif wildcards.header == "dhs_core":
+#                 cov_name = "DHS_core_mean_signal"    
+            
+#             rate = dd.read_csv(input[0], sep = "\t")
+
+#             print(rate.columns)
+            
+#             include_columns = ["mu_index", "Freq_bin"]
+            
+#             interval_min = float(wildcards.interval_min)
+#             interval_max = float(wildcards.interval_max)
+            
+#             column_name = "dhs_gene"
+            
+#             include_columns.append(column_name)
+                
+#             rate[column_name] = rate[cov_name].where((rate[cov_name] >= interval_min) & (rate[cov_name] < interval_max), 0)
+#             rate[column_name] = rate[column_name].astype(bool).astype(int)
+            
+#             rate = rate[rate[column_name] == 1]
+            
+#             rate = rate[include_columns]
+
+#             rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+            
+# rule make_genes_interval_by_mean_signal_only_dhscore:
+#     input:
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "dhs_core_{chrom}.tsv")
+#     output:
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "dhs_core_signal_{interval_min}_{interval_max}_chr_{chrom}.tsv")
+#     resources:
+#         partition="short",
+#         runtime="0-12:00",
+#         cpus_per_task=5,
+#         mem_mb=25000
+#     run:
+#         with Client() as client:
+            
+#             header = "dhs_core"
+            
+#             if header == "dhs":
+#                 cov_name = "DHS_mean_signal"
+#             elif header == "dhs_core":
+#                 cov_name = "DHS_core_mean_signal"    
+            
+#             rate = dd.read_csv(input[0], sep = "\t")
+
+#             print(rate.columns)
+            
+#             include_columns = ["mu_index", "Freq_bin"]
+            
+#             interval_min = float(wildcards.interval_min)
+#             interval_max = float(wildcards.interval_max)
+            
+#             column_name = "dhs_gene"
+            
+#             include_columns.append(column_name)
+                
+#             rate[column_name] = rate[cov_name].where((rate[cov_name] >= interval_min) & (rate[cov_name] < interval_max), 0)
+#             rate[column_name] = rate[column_name].astype(bool).astype(int)
+            
+#             rate = rate[rate[column_name] == 1]
+            
+#             rate = rate[include_columns]
+
+#             rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+            
+            
+# rule make_genes_interval_by_sample:
+#     input:
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "dhs_{chrom}.tsv")
+#     output:
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "{header}_signal_{interval_min_signal}_{interval_max_signal}_sample_{interval_min}_{interval_max}_chr_{chrom}.tsv")
+#     resources:
+#         partition="short",
+#         runtime="0-12:00",
+#         cpus_per_task=5,
+#         mem_mb=25000
+#     run:
+#         with Client() as client:
+            
+#             rate = dd.read_csv(input[0], sep = "\t")
+
+#             print(rate.columns)
+            
+#             if wildcards.header == "dhs":
+#                 cov_name = "DHS_mean_signal"
+#             elif wildcards.header == "dhs_core":
+#                 cov_name = "DHS_core_mean_signal"    
+            
+#             include_columns = ["mu_index", "Freq_bin"]
+            
+#             interval_min = float(wildcards.interval_min_signal)
+#             interval_max = float(wildcards.interval_max_signal)
+            
+#             column_name = "dhs_gene"
+            
+#             include_columns.append(column_name)
+                
+#             rate[column_name] = rate[cov_name].where((rate[cov_name] >= interval_min) & (rate[cov_name] < interval_max), 0)
+#             rate[column_name] = rate[column_name].astype(bool).astype(int)
+            
+#             rate = rate[rate[column_name] == 1]
+            
+                        
+#             interval_min = int(wildcards.interval_min)
+#             interval_max = int(wildcards.interval_max)
+            
+#             cov_name = "DHS_sample"
+#             column_name = "sample_gene"
+            
+#             include_columns.append(column_name)
+                
+#             rate[column_name] = rate[cov_name].where((rate[cov_name] >= interval_min) & (rate[cov_name] < interval_max), 0)
+#             rate[column_name] = rate[column_name].astype(bool).astype(int)
+            
+#             rate = rate[rate[column_name] == 1]
+            
+#             rate = rate[include_columns]
+
+#             rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+                        
+##############################################################################################################################
+# rule sort:
+#     input:
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "/{chrom}.tsv")
+#     output:
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "/{chrom}_sorted.tsv")
+#     run:
+#         with Client() as client:
+#             rate = dd.read_csv(input[0], sep = "\t")
+#             rate = rate.sort_values('window_1k') 
+#             rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+                
+
+rule sample_size:
+    input:
+        os.path.join(scratch_dir, "kl_input/"+ file_directory +"{header}_chr_{chrom}.tsv")
+    output:
+        first = os.path.join(scratch_dir, "kl_input/"+ file_directory +"{header}_sample_{samplesize}_chr_{chrom}_sampled.tsv"),
+        second = os.path.join(scratch_dir, "kl_input/"+ file_directory +"{header}_sample_{samplesize}_chr_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            rate = dd.read_csv(input[0], sep = "\t")
+            
+            sites = len(rate)
+            
+            if sites != 0:
+                rate = rate.sample(frac = int(wildcards.samplesize)/sites, replace = True)
+            
+            rate.to_csv(output.first, sep = "\t", index = None, single_file = True)
+            
+            head_value = int(wildcards.samplesize) + 1
+            
+            shell("head -n {head_value} {output.first} >> {output.second}")
+                        
+            
+            
+rule make_chunks:
+    input:
+        os.path.join(scratch_dir, "kl_input/"+ file_directory +"{header}_chr_{chrom}.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/"+ file_directory +"{header}_chr_{chrom}/chunk_{chunksize}_0.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=1,
+        mem_mb=5000
+    run:
+        #remove previous files
+        header = "_".join(output[0].split("_")[:-1])
+        header = header + "*.tsv"
+        try:
+            shell("rm " + header)
+        except:
+            print("no file")
+        print("removing " + header)
+                
+        iterator = 0
+        
+        input_filename = input[0]
+        output_dir = "/".join(output[0].split("/")[:-1])
+        
+        chunksize = int(wildcards.chunksize)
+        
+        with pd.read_csv(input_filename, chunksize=chunksize, sep = "\t") as reader:
+            row = 0
+            for chunk in reader:
+                print(iterator)
+                chunk.to_csv(output_dir + "/chunk_" + str(chunksize) + "_" + str(iterator) + ".tsv", sep = "\t", index = None)
+                iterator += 1
+                           
+rule make_tsv_files_even:
+    input:
+        [os.path.join(scratch_dir, "kl_input/" + file_directory + "{header}_chr_" + chrom + "/chunk_{chunksize}_0.tsv") for chrom in even_chrom_set]
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "{header}_chr_-2/chunk_{chunksize}_0.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        #remove previous files
+        header = "_".join(output[0].split("_")[:-1])
+        header = header + "*.tsv"
+        try:
+            shell("rm " + header)
+        except:
+            print("no file")
+        print("removing " + header)
+        
+        output_dir = "/".join(output[0].split("/")[:-1])
+        iterator = 0
+        
+        for filename in input:
+            file_list = glob.glob("_".join(filename.split("_")[:-1]) + "_*.tsv")
+            
+            
+            for file in file_list:
+                rate = pd.read_csv(file, sep = "\t")
+            
+                rate.to_csv(output_dir + "/chunk_" + str(wildcards.chunksize) + "_" + str(iterator) + ".tsv", sep = "\t", index = None)
+                iterator += 1
+                    
+            
+            
+            
+rule get_length:
+    input:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "{header}_chr_{chrom_all}/chunk_{chunksize}_0.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/"+ file_directory +"{header}_chr_{chrom_all}_chunk_{chunksize}_length.tsv"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            input_filename = "_".join(input[0].split("_")[:-1]) + "_*.tsv"
+            
+            rate = dd.read_csv(input_filename, sep = "\t")
+            
+            length = len(rate)
+            column_length = len(rate.columns)
+            
+            f = open(output[0], "w")
+            
+            f.write(str(length) + "\n")
+            f.write(str(column_length) + "\n")
+            
+            f.close()
+        
+        
+########################################## For running KL analysis #####################################
+        
+rule run_KL_cov:
+    input:
+        variants = os.path.join(scratch_dir, "kl_input/" + file_directory + "{header}_chr_{chrom_all}/chunk_{chunksize}_0.tsv"),
+        length_file = os.path.join(scratch_dir, "kl_input/" + file_directory +"{header}_chr_{chrom_all}_chunk_{chunksize}_length.tsv"),
+        neutral_sfs = os.path.join(KL_data_dir, "whole_genome/allele_freq/adaptive_bins/all.tsv"),
+#         neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all.tsv",
+#         neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all_original.tsv"
+    output:
+        os.path.join(KL_data_dir, "raklette_output/"+ file_directory +"{header}_chr_{chrom_all}_chunksize_{chunksize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}.pkl")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=10,
+        mem_mb=20000
+    run:
+        n_covs = 1
+        
+        input_filename = input.variants
+        input_directory = "/".join(input_filename.split("/")[:-1]) + "/"
+        output_filename = output[0]
+        neutral_sfs_filename = input.neutral_sfs
+        
+        df = pd.read_csv(input.length_file, sep = "\t", header = None)
+        nb_samples = df[0][0]
+        nb_features = df[0][1] - 2
+        
+        print("number of samples: " + str(nb_samples))
+        
+        if nb_samples == 0:
+            f = open(output_filename, "w")
+            f.write("no sample")
+            f.close()
+        else:        
+            with open(input.variants) as f:
+                first_line = f.readline()
+            header = first_line.split("\t")
+            
+            chunksize = int(wildcards.chunksize)
+
+            print("number of chunks " + str(nb_samples/chunksize))
+            
+            dataset = TSVDataset(input_directory, chunksize=chunksize, nb_samples = nb_samples, header_all = header, features = header)
+            loader = DataLoader(dataset, batch_size=1, num_workers=1, shuffle=False)
+
+            num_epochs = int(wildcards.epoch)
+            cov_prior = float(wildcards.cov_prior)
+            
+            #lets run raklette
+            run_raklette_cov(loader, nb_features, num_epochs, neutral_sfs_filename, output_filename, 
+                         float(wildcards.learning_rate), float(wildcards.gamma), 
+                             cov_sigma_prior = torch.tensor(cov_prior, dtype=torch.float32))
