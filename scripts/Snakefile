@@ -257,9 +257,6 @@ rule run_KL_cov:
             dataset = TSVDataset(input_directory, chunksize=chunksize, nb_samples = nb_samples, header_all = header, features = header)
             loader = DataLoader(dataset, batch_size=1, num_workers=1, shuffle=False)
 
-            num_epochs = int(epoch)
-            cov_prior = float(cov_prior)
-
             #lets run raklette
             run_raklette_cov(loader, nb_features, num_epochs, neutral_sfs_filename, output_filename, 
                          float(learning_rate), float(gamma), 

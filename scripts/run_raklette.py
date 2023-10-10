@@ -177,6 +177,7 @@ def run_raklette(loader, n_covs, n_genes, num_epochs, neutral_sfs_filename, outp
     with open(output_filename, 'wb') as f:
         pickle.dump(result, f)
 
+        
 def run_raklette_cov(loader, n_covs, num_epochs, neutral_sfs_filename, output_filename, lr, gamma, cov_sigma_prior = torch.tensor(0.1, dtype=torch.float32), mu_col = 0, bin_col = 1, cov_col = 2):
     #lr is initial learning rate
 
@@ -278,6 +279,7 @@ def run_raklette_cov(loader, n_covs, num_epochs, neutral_sfs_filename, output_fi
     ##############################post inference##############################
     
     result = raklette.post_analysis_cov(neutral_sfs, mu_ref, n_bins, n_covs, losses, cov_sigma_prior = cov_sigma_prior)
-
+    
+    print("dumping file to output")
     with open(output_filename, 'wb') as f:
         pickle.dump(result, f)
