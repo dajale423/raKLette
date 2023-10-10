@@ -115,7 +115,9 @@ def make_bins(jmin, bb, nn, incl_zero=False):
         bb_next *= bb
         bb_next = math.ceil(bb_next) if math.floor(bb_next)==bins[-1] else math.floor(bb_next)
         bins = np.append(bins, bb_next)
-    bins = np.concatenate((bins[:-1], [math.ceil(nn/2), nn]))
+    # bins = np.concatenate((bins[:-1], [math.ceil(nn/2), nn]))
+    # Try including 50% and up in the last bin
+    bins[-1] = nn
     if incl_zero:
         bins = np.concatenate(([0], bins))
     return bins
@@ -246,6 +248,16 @@ def read_sfs_data(sfs_loc, prefix):
 
     return sfs_set, mu_unique, s_unique
 
+def simple_mu_dist(nn):
+    mu_vals = np.array([1.e-09, 2.e-09, 5.e-09, 
+                        1.e-08, 2.e-08, 5.e-08, 
+                        1.e-07, 2.e-07,5.e-07])
+    sim_mu_dist = [1e5,1e6,2e6,
+                   1e6,1e5,1e3,
+                   2e3,5e4,2e3]
+    sim_mu_dist = sim_mu_dist / np.sum(sim_mu_dist)
+    return np.random.choice(mu_vals, size=nn, p=sim_mu_dist)
+
 class simPile:
     """
     A class for storing and using SFS simulations over a grid of selection
@@ -282,6 +294,10 @@ class simPile:
         assert self.n_m == len(self.mu_set)
         assert self.n_s == len(self.shet_set)
 
+        # verify that mu_set and shet_set are sorted, non-negative and in increasing order
+        assert np.all(np.diff(self.mu_set) > 0)
+        assert np.all(np.diff(self.shet_set) > 0)
+
         # verify that the SFS has an even number of bins
         # meaning it is zero-inclusive and does not include the fixed class
         # (this assumes diploidy)
@@ -306,7 +322,7 @@ class simPile:
         self.neutral_betas_binned = None
         self.betas_binned = None
 
-    def sample(self, mu_vals, s_vals, bin=False):
+    def sample(self, mu_vals, s_vals, bin_sfs=False, return_grid=False):
         """
         Generate a sample of allele frequencies using the probability distribution
         implied by the SFS simulations.
@@ -319,7 +335,7 @@ class simPile:
         s_vals : array_like
             The selection coefficients for each sample.
             (n) array.
-        bin : bool, optional
+        bin_sfs : bool, optional
             Whether to use the SFS for sampling, if available. Default is False.
 
         Returns
@@ -337,7 +353,7 @@ class simPile:
         s_ind = np.argmin(np.abs(self.shet_set[:, np.newaxis] - s_vals), axis=0)
 
         # get the SFS for the sampled mutation rates and selection coefficients
-        if bin:
+        if bin_sfs:
             # check if the SFS has been binned
             if self.binned_sfs is None:
                 raise ValueError("SFS has not been binned.")
@@ -348,11 +364,12 @@ class simPile:
         nn = len(mu_vals)
         random_values = np.random.rand(nn, 1)
         sample = np.sum(sfs_cumsum < random_values, axis=1)
-
+        if return_grid:
+            return sample, self.mu_set[mu_ind], self.shet_set[s_ind]
         return sample
 
 
-    def get_neutral_betas(self, bin=False):
+    def get_neutral_betas(self, bin_sfs=False):
         """
         Get the multinomial coefficients for neutral simulations at each mutation rate.
 
@@ -364,7 +381,7 @@ class simPile:
         """
         if not self.has_neutral:
             raise ValueError("No neutral simulation in the set.")
-        if bin:
+        if bin_sfs:
             # check if the SFS has been binned
             if self.binned_sfs is None:
                 raise ValueError("SFS has not been binned.")
@@ -375,7 +392,7 @@ class simPile:
             self.neutral_betas = neutral_betas
         return neutral_betas
 
-    def get_betas(self, bin=False):
+    def get_betas(self, bin_sfs=False):
         """
         Get the multinomial coefficients for each selection coefficient at each mutation rate.
 
@@ -385,12 +402,12 @@ class simPile:
             The multinomial coefficients for each selection coefficient at each mutation rate.
             (n_m x n_s x n_k-1) array.
         """
-        if bin:
+        if bin_sfs:
             # check if the SFS has been binned
             if self.binned_sfs is None:
                 raise ValueError("SFS has not been binned.")
             # Always get neutral betas in case binning has changed
-            neutral_betas = self.get_neutral_betas(bin=True)
+            neutral_betas = self.get_neutral_betas(bin_sfs=True)
             betas = multinomial_trans(self.binned_sfs, offset=neutral_betas[:,None,:])
             self.betas_binned = betas
         else:
@@ -448,7 +465,31 @@ class simPile:
         self.bin_sizes = bin_sizes(bins)
 
         return binned_sfs
+
+class neutralDFE:
+    """
+    Class for generating samples of selection coefficients from a neutral DFE.
     
+    Only really useful because some functions need a DFE object.
+    """
+    def __init__(self):
+        """
+        Initialize the neutralDFE object.
+        """
+        pass
+    
+    def grid_pmf(self, shet_grid):
+        """
+        Neutral pmf is a point mass at zero.
+        """
+        return np.where(shet_grid==0, 1, 0)
+    
+    def sample(self, nn):
+        """
+        Neutral DFE samples are all zero (log scale).
+        """
+        return -np.inf*np.ones(nn)
+
 class betaDFE:
     """
     A class for generating samples of selection coefficients from a beta distributed DFE.
@@ -472,6 +513,63 @@ class betaDFE:
         self.min_shet = min_shet
         self.max_shet = max_shet
 
+    def pdf(self, shet):
+        """
+        Compute the pdf of the beta distribution.
+
+        Parameters
+        ----------
+        shet : array_like
+            The selection coefficients.
+
+        Returns
+        -------
+        pdf : array_like
+            The pdf of the beta distribution.
+        """
+        x = self.shet_to_x(shet)
+        pdf = stats.beta.pdf(x, self.a, self.b)
+        return pdf
+    
+    def cdf(self, shet):
+        """
+        Compute the cdf of the beta distribution.
+
+        Parameters
+        ----------
+        shet : array_like
+            The selection coefficients.
+
+        Returns
+        -------
+        cdf : array_like
+            The cdf of the beta distribution.
+        """
+        x = self.shet_to_x(shet)
+        cdf = stats.beta.cdf(x, self.a, self.b)
+        return cdf
+    
+    def grid_pmf(self, shet_grid):
+        """
+        Compute the pmf of the beta distribution on a grid of selection coefficients.
+
+        Parameters
+        ----------
+        shet_grid : array_like
+            The selection coefficients grid.
+
+        Returns
+        -------
+        pmf : array_like
+            A pmf on the shet grid that approximates the beta distribution.
+        """
+        x_grid = self.shet_to_x(shet_grid)
+        x_mids = (x_grid[1:] + x_grid[:-1])/2
+        x_mids = np.concatenate([[0], x_mids, [1]])
+        x_cdf = stats.beta.cdf(x_mids, self.a, self.b)
+        pmf = np.diff(x_cdf)
+        return pmf
+
     def sample(self, nn):
         """
         Generate a sample of selection coefficients where the beta distribution is
@@ -488,7 +586,8 @@ class betaDFE:
             The sampled selection coefficients.
             (nn) array.
         """
-        shet = np.random.beta(self.a, self.b, size=nn)*(np.log10(self.max_shet)-np.log10(self.min_shet)) + \
+        shet = np.random.beta(self.a, self.b, size=nn)*(np.log10(self.max_shet) -
+                                                        np.log10(self.min_shet)) + \
             np.log10(self.min_shet)
         return shet
 
@@ -506,7 +605,8 @@ class betaDFE:
         x : array_like
             The beta distribution parameter.
         """
-        x = (np.log10(shet) - np.log10(self.min_shet))/(np.log10(self.max_shet) - np.log10(self.min_shet))
+        x = (np.log10(shet) - np.log10(self.min_shet))/(np.log10(self.max_shet) - 
+                                                        np.log10(self.min_shet))
         return x
     
     def plot(self):
@@ -524,10 +624,11 @@ class betaDFE:
         plt.rcParams['xtick.labelsize'] = 14
         plt.rcParams['ytick.labelsize'] = 14
         # set the x and y axis label sizes
-        plt.rcParams['axes.labelsize'] = 16
+        plt.rcParams['axes.labelsize'] = 20
 
         # make the legend a reasonable size
         plt.rcParams['legend.fontsize'] = 14
+        plt.tight_layout()
 
         shet_tick_locations = [10**exponent for exponent in 
                                range(int(np.log10(self.min_shet)), int(np.log10(self.max_shet)) + 1)]
@@ -595,11 +696,166 @@ class windowSim(selectionSim):
     """
     A class for simulating allele frequencies under selection in a genomic window.
     """
-    def __init__(self, sfs_pile, mu_dist, window_size, dfe):
+    def __init__(self, sfs_pile, mu_dist, window_size, dfe, 
+                 neut_p=0, bin_sfs=True, reference_mu=1e-8):
         super().__init__(sfs_pile, mu_dist)
         self.window_size = window_size
         self.dfe = dfe
+        self.neut_p = neut_p
+        self.bin_sfs = bin_sfs
+        self.reference_mu = reference_mu
+        self.mu_ind = np.argmin(np.abs(self.sfs_pile.mu_set - self.reference_mu))
+
+        # check that the sim_pile has a neutral simulation if neut_p > 0
+        if self.neut_p > 0 and not self.sfs_pile.has_neutral:
+            raise ValueError("No neutral simulation in the set.")
+        
+        self.dfe_sfs = self.dfe_sfs()
+        if bin_sfs:
+            self.neut_sfs = self.sfs_pile.binned_sfs[self.mu_ind, self.sfs_pile.neutral_index, :]
+        else:
+            self.neut_sfs = self.sfs_pile.sfs_set[self.mu_ind, self.sfs_pile.neutral_index, :]
+        self.KL = self.calc_dfe_KL()
+
+    def get_neutral_betas(self):
+        return self.sfs_pile.neutral_betas_binned if self.bin_sfs else self.sfs_pile.neutral_betas
+
+    def dfe_sfs(self):
+        """
+        Get the SFS for the provided dfe by integrating out selection coefficients
+
+        Returns
+        -------
+        dfe_sfs : array_like
+            The SFS for the provided dfe.
+            (n_m, n_k) array, where n_m is the number of mutation rates and n_k is
+            the number of allele count classes.
+        """
+        s_vals = self.sfs_pile.shet_set
+        s_vals = s_vals[s_vals > 0]
+        s_pmf = self.dfe.grid_pmf(s_vals)
+        # if self.neut_p > 0:
+        s_pmf = (1-self.neut_p)*s_pmf
+        s_pmf = np.concatenate([[self.neut_p], s_pmf])
+        if self.bin_sfs:
+            dfe_sfs = np.sum(self.sfs_pile.binned_sfs*s_pmf[:,None], axis=1)
+        else:
+            dfe_sfs = np.sum(self.sfs_pile.sfs_set*s_pmf[:,None], axis=1)
+        self.dfe_sfs = dfe_sfs
+        return dfe_sfs
+
+    def calc_dfe_KL(self):
+        """
+        Compute the KL divergence between the SFS under the given DFE and the
+        SFS under neutrality, defined by the sfs_pile.
+        """
+        # Take into account where dfe_sfs is zero, by removing these entries
+        # x log(x) -> 0 as x -> 0
+        dfe_sfs = self.dfe_sfs[self.mu_ind]
+        neut_sfs = self.neut_sfs[dfe_sfs > 0]
+        dfe_sfs = dfe_sfs[dfe_sfs > 0]
+        KL = np.sum(dfe_sfs*np.log(dfe_sfs/neut_sfs))
+        return KL
 
     def make_sample(self, n_windows):
+        result = np.zeros((n_windows,) + self.dfe_sfs.shape, dtype=int)
+        result_KL = np.zeros(n_windows)
+        result_shet = np.zeros((n_windows, self.window_size))
+        result_mu = np.zeros((n_windows, self.window_size))
+        for ii in range(n_windows):
+            # sample a set of mutation rates
+            mu_vals = self.mu_dist(self.window_size)
+            # sample a set of selection coefficients
+            shet_vals = np.power(10, self.dfe.sample(self.window_size))
+            # sample allele frequencies
+            freqs, mu_grid, shet_grid = self.sfs_pile.sample(mu_vals, shet_vals, 
+                                              bin_sfs=self.bin_sfs, return_grid=True)
+            result[ii] = reshape_counts(freqs, mu_grid, self.sfs_pile.mu_set, 
+                                        len(self.sfs_pile.bin_means))
+            # compute the KL divergence between the DFE and neutrality
+            # get the nearest value in self.sfs_pile.shet_set to the sampled shet_grid
+            shet_ind = np.argmin(np.abs(self.sfs_pile.shet_set[:, np.newaxis] - shet_grid), axis=0)
+            # count the number of times each shet value is sampled
+            shet_counts = np.bincount(shet_ind, minlength=len(self.sfs_pile.shet_set))
+            sample_shet_dist = shet_counts/np.sum(shet_counts)
+            # get the KL divergence between the sampled shet distribution and the DFE
+            if self.bin_sfs:
+                dfe_sfs = np.sum(self.sfs_pile.binned_sfs[self.mu_ind]*
+                                 sample_shet_dist[:,None], axis=0)
+            else:
+                dfe_sfs = np.sum(self.sfs_pile.sfs_set[self.mu_ind]*
+                                 sample_shet_dist[:,None], axis=0)
+            neut_sfs = self.neut_sfs[dfe_sfs>0]
+            dfe_sfs = dfe_sfs[dfe_sfs>0]
+            result_KL[ii] = np.sum(dfe_sfs*np.log(dfe_sfs/neut_sfs))
+            result_shet[ii] = shet_grid
+            result_mu[ii] = mu_grid
+        return result, result_KL, result_mu, result_shet
+    
+def reshape_counts(freq_bins, mu_grid, mu_vals, n_k):
+    """
+    Reshape the allele frequency counts into a 2D array, where the first dimension
+    is the mutation rate and the second dimension is the allele frequency.
 
-        pass
+    Parameters
+    ----------
+    freq_bins : array_like
+        The allele frequencies
+        n_l array, where n_l is the number of simulated sites
+    mu_grid : array_like
+        The mutation rates
+        n_l array, where n_l is the number of simulated sites
+    max_bin : int
+        The maximum allele frequency bin.
+
+    Returns
+    -------
+    freq_counts : array_like
+        The allele frequency counts.
+        (n_m x n_k) array, where n_m is the number of mutation rates and n_k is
+        the number of allele frequency bins.
+    """
+    # check that all mu_grid are in mu_vals
+    assert np.all(np.isin(mu_grid, mu_vals))
+
+    result = np.zeros((len(mu_vals), n_k), dtype=int)
+    for ii in range(len(mu_vals)):
+        result[ii] = np.bincount(freq_bins[mu_grid==mu_vals[ii]], minlength=n_k)
+    return result
+
+
+def calc_comparison(window_sim, win_sfs, counts):
+    """
+    Calculate comparison metrics between the window simulation and the fitted
+    maximum likelihood non-decreasing SFS
+
+    Parameters
+    ----------
+    window_sim : windowSim
+        The window simulation object.
+    win_sfs : ml_raklette.WinSFS
+        The fitted maximum likelihood non-decreasing SFS.
+    counts : array_like
+        The allele frequency counts.
+        (n_m x n_k) array, where n_m is the number of mutation rates and n_k is
+        the number of allele frequency bins.
+
+    Returns
+    -------
+    result : dict
+        A dictionary containing the comparison metrics.
+    """
+    # verify that the ml SFS was estimated
+    assert win_sfs.fit_probs_optim is not None
+    # verify that the window simulation and the WinSFS have the same number of mutation rates
+    assert window_sim.dfe_sfs.shape[0] == win_sfs.fit_probs_optim.shape[0]
+
+    # get the KL divergence between the fitted SFS and neutrality
+    # using the reference mutation rate given for the window simulation
+    KL_fit = win_sfs.KL(window_sim.mu_ind)
+    KL_dfe = window_sim.KL
+
+    result = {"KL_fit": KL_fit, 
+              "KL_dfe": KL_dfe}
+    return result
+

@@ -122,7 +122,7 @@ class WinSFS:
         using traditional optimization.
         """
         # initialize the optimization
-        alpha0 = np.ones(self.K-1)
+        alpha0 = np.zeros(self.K-1)
         bounds = [(0, beta_max) for k in range(self.K-1)]
         # perform the optimization
         if not jac:
@@ -160,7 +160,7 @@ class WinSFS:
         # initialize the array to store the inferred latent SFS for each bootstrap sample
         alpha_bs = np.zeros((n_bs, self.K-1))
         # initialize the optimization
-        alpha0 = np.ones(self.K-1)
+        alpha0 = np.zeros(self.K-1)
         bounds = [(0, beta_max) for k in range(self.K-1)]
         # loop over bootstrap samples
         for i in range(n_bs):
@@ -182,3 +182,30 @@ class WinSFS:
         # return the inferred latent SFS for each bootstrap sample
         return alpha_bs, fit_probs_bs
         
+    def KL(self, mu_ind):
+        """
+        Compute the KL divergence between the inferred latent SFS and the
+        SFS expected under neutrality given the offset at a particular mutation
+        rate.
+
+        Parameters
+        ----------
+        mu_ind : int
+            The index of the mutation rate class to use as a reference.
+
+        Returns
+        -------
+        KL : float
+        """
+        # verify that the mutation rate index is valid
+        assert mu_ind >= 0 and mu_ind < self.M
+        # verify that the latent SFS has been inferred
+        assert self.alpha_optim is not None
+        # compute the KL divergence
+        fit_sfs = self.fit_probs_optim[mu_ind,:]
+        neut_sfs = np.exp(self.beta_0_0[mu_ind,:]) / np.sum(np.exp(self.beta_0_0[mu_ind,:]))
+        neut_sfs = neut_sfs[fit_sfs>0]
+        fit_sfs = fit_sfs[fit_sfs>0]
+        KL = np.sum(fit_sfs * (np.log(fit_sfs) - np.log(neut_sfs)))
+        return KL
+    
