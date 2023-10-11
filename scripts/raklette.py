@@ -161,7 +161,27 @@ class raklette_cov():
         sfs = softmax(pad(mn_sfs[..., mu_vals, :] - torch.matmul(covariates, beta_cov_trans)))
         
         with pyro.plate("sites", n_sites):
-            pyro.sample("obs", dist.Categorical(sfs), obs=sample_sfs) 
+            pyro.sample("obs", dist.Categorical(sfs), obs=sample_sfs)
+            
+def post_analysis_cov(neutral_sfs, mu_ref, n_bins, n_covs, losses, cov_sigma_prior, ref_mu_ii = -1):
+
+    neut_sfs_full = neutral_sfs
+
+    beta_neut_full = multinomial_trans_torch(neut_sfs_full) #neut_sfs_full is the neutral sfs
+    # grab gene-DFE prior parameter point estimates
+    beta_neut = beta_neut_full[ref_mu_ii,:]
+
+    #make result into a dictionary
+    result = {"neut_sfs_full":neut_sfs_full, "beta_neut_full":beta_neut_full, "ref_mu_ii":ref_mu_ii, "cov_sigma_prior":cov_sigma_prior}
+
+#     result["post_beta_cov"] = torch.cumsum(post_samples['beta_cov'], -1)
+    result["losses"] = losses
+
+    fig, ax = plot_losses(losses)
+
+    result["fig"] = (fig, ax)
+
+    return result
             
 ####################################################raklette running covariates + genes ########################################
 class raklette():
