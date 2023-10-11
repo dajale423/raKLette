@@ -1,11 +1,18 @@
 import math
 import glob
 import os
+import sys
 import torch
 import fastDTWF
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.stats as stats
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+script_folder_path = os.path.join(current_dir, '..', 'scripts')
+sys.path.append(script_folder_path)
+
+import ml_raklette as mlr
 
 # convert list of value to a list of indices where the value changes 
 # and what those values are
@@ -117,7 +124,7 @@ def make_bins(jmin, bb, nn, incl_zero=False):
         bins = np.append(bins, bb_next)
     # bins = np.concatenate((bins[:-1], [math.ceil(nn/2), nn]))
     # Try including 50% and up in the last bin
-    bins[-1] = nn
+    bins[-1] = nn-1
     if incl_zero:
         bins = np.concatenate(([0], bins))
     return bins
@@ -311,6 +318,9 @@ class simPile:
         # get the index of the neutral simulation
         self.neutral_index = np.where(self.shet_set==0)[0][0] if self.has_neutral else None
 
+        # Calculate and store cumulative sum of SFS to make binning faster
+        self.sfs_cumsum = np.cumsum(self.sfs_set, axis=-1)
+
         self.binned_sfs = None
         self.bins = None
         self.bin_means = None
@@ -321,6 +331,26 @@ class simPile:
 
         self.neutral_betas_binned = None
         self.betas_binned = None
+
+    def downsample(self, sample_size=2*70000, tv_sd=0.05, row_eps=1e-8):
+        """
+        Use fastDTWF to apply hypergeometric sampling to the SFS simulations.
+        Create and return a new simPile object with the downsampled SFS simulations.
+        """
+        # loop through mutation rates and selection coefficients
+        # and downsample each SFS
+        new_sfs_set = np.zeros((self.n_m, self.n_s, sample_size))
+        for ii in range(self.n_m):
+            for jj in range(self.n_s):
+                new_sfs = fastDTWF.hypergeometric_sample(torch.tensor(self.sfs_set[ii,jj,:]),
+                                                         sample_size, tv_sd, row_eps, 
+                                                         sfs=False).numpy()
+                new_sfs[0] += new_sfs[-1] # add the fixed class to the zero-frequency class
+                new_sfs_set[ii,jj,:] = new_sfs[:-1]  # remove the fixed class
+
+        # create a new simPile object with the downsampled SFS simulations
+        new_sim_pile = simPile(new_sfs_set, self.mu_set, self.shet_set)
+        return new_sim_pile
 
     def sample(self, mu_vals, s_vals, bin_sfs=False, return_grid=False):
         """
@@ -357,15 +387,15 @@ class simPile:
             # check if the SFS has been binned
             if self.binned_sfs is None:
                 raise ValueError("SFS has not been binned.")
-            sfs_cumsum = np.cumsum(self.binned_sfs, axis=-1)[mu_ind, s_ind, :]
+            sfs_cumsum = self.binned_sfs_cumsum[mu_ind, s_ind, :]
         else:
-            sfs_cumsum = np.cumsum(self.sfs_set, axis=-1)[mu_ind, s_ind, :]
+            sfs_cumsum = self.sfs_cumsum[mu_ind, s_ind, :]
 
         nn = len(mu_vals)
         random_values = np.random.rand(nn, 1)
         sample = np.sum(sfs_cumsum < random_values, axis=1)
         if return_grid:
-            return sample, self.mu_set[mu_ind], self.shet_set[s_ind]
+            return sample, self.mu_set[mu_ind], self.shet_set[s_ind], mu_ind, s_ind
         return sample
 
 
@@ -437,29 +467,29 @@ class simPile:
         binned_sfs : array_like
             The binned SFS as a probability distribution.
         """
-        # make the bins
+        # make the bins, this part is relatively fast
         bins = make_bins(jmin, bb, self.n_k, incl_zero)
 
         # initialize the binned SFS
         binned_sfs = np.zeros((self.n_m, self.n_s, len(bins)-1))
 
-        if not incl_zero:
-            count_range = (1, self.n_k)
+        if incl_zero:
+            binned_sfs = self.sfs_set[...,bins[:-1]] + \
+                np.diff(self.sfs_cumsum[..., bins], axis=-1) - \
+                    self.sfs_set[...,bins[1:]]
         else:
-            count_range = (0, self.n_k)
-
-        # bin the SFS
-        for i in np.arange(self.n_m):
-            for j in np.arange(self.n_s):
-                binned_sfs[i,j] = np.histogram(np.arange(0, self.n_k), bins=bins, 
-                                               weights=self.sfs_set[i,j], 
-                                               range=count_range)[0]
+            binned_sfs = self.sfs_set[...,bins[:-1]] + \
+                np.diff(self.sfs_cumsum[..., bins], axis=-1) - \
+                    self.sfs_set[...,bins[1:]]
+            binned_sfs -= self.sfs_set[...,0] # subtract the zero-frequency class
+        binned_sfs[...,-1] += self.sfs_set[...,bins[-1]]
 
         # normalize the binned SFS to be a probability distribution in case zero-frequency class is excluded
         if not incl_zero:
             binned_sfs /= np.sum(binned_sfs, axis=2)[:,:,None]
         
         self.binned_sfs = binned_sfs
+        self.binned_sfs_cumsum = np.cumsum(binned_sfs, axis=-1)
         self.bins = bins
         self.bin_means = bin_means(bins)
         self.bin_sizes = bin_sizes(bins)
@@ -758,39 +788,53 @@ class windowSim(selectionSim):
         return KL
 
     def make_sample(self, n_windows):
-        result = np.zeros((n_windows,) + self.dfe_sfs.shape, dtype=int)
-        result_KL = np.zeros(n_windows)
-        result_shet = np.zeros((n_windows, self.window_size))
-        result_mu = np.zeros((n_windows, self.window_size))
-        for ii in range(n_windows):
-            # sample a set of mutation rates
-            mu_vals = self.mu_dist(self.window_size)
-            # sample a set of selection coefficients
-            shet_vals = np.power(10, self.dfe.sample(self.window_size))
-            # sample allele frequencies
-            freqs, mu_grid, shet_grid = self.sfs_pile.sample(mu_vals, shet_vals, 
-                                              bin_sfs=self.bin_sfs, return_grid=True)
-            result[ii] = reshape_counts(freqs, mu_grid, self.sfs_pile.mu_set, 
-                                        len(self.sfs_pile.bin_means))
-            # compute the KL divergence between the DFE and neutrality
-            # get the nearest value in self.sfs_pile.shet_set to the sampled shet_grid
-            shet_ind = np.argmin(np.abs(self.sfs_pile.shet_set[:, np.newaxis] - shet_grid), axis=0)
-            # count the number of times each shet value is sampled
-            shet_counts = np.bincount(shet_ind, minlength=len(self.sfs_pile.shet_set))
-            sample_shet_dist = shet_counts/np.sum(shet_counts)
-            # get the KL divergence between the sampled shet distribution and the DFE
-            if self.bin_sfs:
-                dfe_sfs = np.sum(self.sfs_pile.binned_sfs[self.mu_ind]*
-                                 sample_shet_dist[:,None], axis=0)
-            else:
-                dfe_sfs = np.sum(self.sfs_pile.sfs_set[self.mu_ind]*
-                                 sample_shet_dist[:,None], axis=0)
-            neut_sfs = self.neut_sfs[dfe_sfs>0]
-            dfe_sfs = dfe_sfs[dfe_sfs>0]
-            result_KL[ii] = np.sum(dfe_sfs*np.log(dfe_sfs/neut_sfs))
-            result_shet[ii] = shet_grid
-            result_mu[ii] = mu_grid
-        return result, result_KL, result_mu, result_shet
+            """
+            Generate a sample of simulated data for a given number of windows.
+
+            Parameters:
+            n_windows (int): The number of windows to generate data for.
+
+            Returns:
+            tuple: A tuple containing four arrays:
+                - A 3D array of shape (n_windows, n_mu, n_shet), 
+                  where n_mu and n_shet are the number of mutation rates and selection coefficients respectively. 
+                  This array contains the simulated allele frequencies for each window.
+                - A 1D array of length n_windows containing the KL divergence between the DFE and neutrality for each window.
+                - A 2D array of shape (n_windows, window_size) containing the mutation rates for each window.
+                - A 2D array of shape (n_windows, window_size) containing the selection coefficients for each window.
+            """
+            result = np.zeros((n_windows,) + self.dfe_sfs.shape, dtype=int)
+            result_KL = np.zeros(n_windows)
+            result_shet = np.zeros((n_windows, self.window_size))
+            result_mu = np.zeros((n_windows, self.window_size))
+            #TODO: somehow speed this up by removing the loop
+            for ii in range(n_windows):
+                # sample a set of mutation rates
+                mu_vals = self.mu_dist(self.window_size)
+                # sample a set of selection coefficients
+                shet_vals = np.power(10, self.dfe.sample(self.window_size))
+                # sample allele frequencies
+                freqs, mu_grid, shet_grid, _, shet_ind = self.sfs_pile.sample(mu_vals, shet_vals, 
+                                                                 bin_sfs=self.bin_sfs, return_grid=True)
+                result[ii] = reshape_counts(freqs, mu_grid, self.sfs_pile.mu_set, 
+                                            len(self.sfs_pile.bin_means))
+                # compute the KL divergence between the DFE and neutrality
+                # count the number of times each shet value is sampled
+                shet_counts = np.bincount(shet_ind, minlength=len(self.sfs_pile.shet_set))
+                sample_shet_dist = shet_counts/np.sum(shet_counts)
+                # get the KL divergence between the sampled shet distribution and the DFE
+                if self.bin_sfs:
+                    dfe_sfs = np.sum(self.sfs_pile.binned_sfs[self.mu_ind]*
+                                     sample_shet_dist[:,None], axis=0)
+                else:
+                    dfe_sfs = np.sum(self.sfs_pile.sfs_set[self.mu_ind]*
+                                     sample_shet_dist[:,None], axis=0)
+                neut_sfs = self.neut_sfs[dfe_sfs>0]
+                dfe_sfs = dfe_sfs[dfe_sfs>0]
+                result_KL[ii] = np.sum(dfe_sfs*np.log(dfe_sfs/neut_sfs))
+                result_shet[ii] = shet_grid
+                result_mu[ii] = mu_grid
+            return result, result_KL, result_mu, result_shet
     
 def reshape_counts(freq_bins, mu_grid, mu_vals, n_k):
     """
@@ -818,12 +862,22 @@ def reshape_counts(freq_bins, mu_grid, mu_vals, n_k):
     # check that all mu_grid are in mu_vals
     assert np.all(np.isin(mu_grid, mu_vals))
 
-    result = np.zeros((len(mu_vals), n_k), dtype=int)
-    for ii in range(len(mu_vals)):
-        result[ii] = np.bincount(freq_bins[mu_grid==mu_vals[ii]], minlength=n_k)
+    # result = np.zeros((len(mu_vals), n_k), dtype=int)
+    # for ii in range(len(mu_vals)):
+    #     result[ii] = np.bincount(freq_bins[mu_grid==mu_vals[ii]], minlength=n_k)
+    # return result
+
+    mask = mu_grid[:, np.newaxis] == mu_vals
+
+    # Use broadcasting to count occurrences for each mu_val
+    result = np.sum(mask[..., np.newaxis] * (freq_bins[:, np.newaxis, np.newaxis] == np.arange(n_k)), 
+                    axis=0)
+
+    # Convert the result to integer type if needed
+    result = result.astype(int)
     return result
 
-
+#TODO: what is "counts" supposed to be doing here?
 def calc_comparison(window_sim, win_sfs, counts):
     """
     Calculate comparison metrics between the window simulation and the fitted
@@ -859,3 +913,75 @@ def calc_comparison(window_sim, win_sfs, counts):
               "KL_dfe": KL_dfe}
     return result
 
+def plot_KL(KL_set, KL_set_neut, KL_sim, ax):
+    """
+    Plots KL divergence values for a given set of data.
+
+    Parameters:
+    KL_set (numpy.ndarray): Array of KL divergence values.
+    KL_set_neut (numpy.ndarray): Array of neutral KL divergence values.
+    KL_sim (numpy.ndarray): Array of true simulated KL divergence values.
+    ax (matplotlib.axes.Axes): Axes object to plot on.
+
+    Returns:
+    None
+    """
+    
+    bin_sizes_plot = ["max"] + bin_sizes[1:]
+    ax.violinplot(KL_set_neut.T, positions=np.arange(1, len(bin_sizes_plot)+1),
+            widths=0.6, showmedians=True, showextrema=False);
+    # ax.boxplot(KL_set_neut.T, positions=np.arange(1, len(bin_sizes_plot)+1),
+        #    widths=0.6, patch_artist=True, boxprops=dict(facecolor="red", alpha=0.5),
+        #    medianprops=dict(color="k"));
+    #ax.boxplot(KL_set.T);
+    ax.violinplot(KL_set.T, positions=np.arange(1, len(bin_sizes_plot)+1),
+            widths=0.6, showmedians=True, showextrema=False);
+    
+    ax.plot(np.arange(1, len(bin_sizes_plot)+1), np.mean(KL_sim,-1));
+    # label the x-axis ticks
+    ax.set_xticks(range(1, len(bin_sizes_plot)+1), bin_sizes_plot, rotation=90); 
+    # label the y-axis
+    ax.set_ylabel("KL divergence");
+    # label the x-axis
+    ax.set_xlabel("bin size");
+    ax.set_yscale("symlog", linthresh=2e-3)
+    # increase the size of the y-axis ticks
+    ax.tick_params(axis='y', which='major', labelsize=16)
+    # increase the size of the x-axis ticks
+    ax.tick_params(axis='x', which='major', labelsize=16)
+    # add more ticks to the y-axis
+    ax.yaxis.set_major_locator(plt.MaxNLocator(10))
+
+def run_test(sim_pile_test, sample_size, dfe, n_sites=100000, bin_sizes=bin_sizes, neut_p=0):
+    """
+    Runs a simulation test using the provided parameters and returns the KL divergence values.
+
+    Args:
+    - sim_pile_test: a SimPile object representing the simulated data
+    - sample_size: an integer representing the number of samples to take
+    - dfe: a DFE object representing the distribution of fitness effects
+    - n_sites: an integer representing the number of sites to simulate
+    - bin_sizes: a list of integers representing the bin sizes to use
+    - neut_p: a float representing the proportion of neutral sites
+
+    Returns:
+    - KL_set: a numpy array of shape (len(bin_sizes), sample_size) representing the KL divergence values for each sample and bin size
+    - KL_sim: a numpy array of shape (len(bin_sizes), sample_size) representing the KL divergence values for each sample and bin size using the simulated data
+    """
+    
+    KL_set = np.zeros((len(bin_sizes), sample_size))
+    KL_sim = np.zeros((len(bin_sizes), sample_size))
+    for ii in range(len(bin_sizes)):
+        bin_test = sim_pile_test.bin_sfs(1, bin_sizes[ii])
+        bin_betas_test = sim_pile_test.get_betas(bin_sfs=True)
+
+        window_test = windowSim(sim_pile_test, simple_mu_dist, n_sites, 
+                                dfe, neut_p=neut_p, bin_sfs=True)
+        counts, KL, _, _ = window_test.make_sample(sample_size)
+        for jj in range(sample_size):
+            win_sfs = mlr.WinSFS(counts[jj], window_test.get_neutral_betas())
+            win_sfs.ml_optim(jac=True, beta_max=100, verbose=False)
+            KL_compare = calc_comparison(window_test, win_sfs, counts[jj])
+            KL_set[ii, jj] = KL_compare["KL_fit"]
+        KL_sim[ii, :] = KL
+    return KL_set, KL_sim
