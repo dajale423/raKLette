@@ -1,0 +1,426 @@
+import os
+import sys
+import glob
+import numpy as np
+import pandas as pd
+import math
+import sys
+import random
+import pickle
+import csv
+
+import dask.dataframe as dd
+import dask.array as da
+from dask.distributed import Client
+
+import random
+
+from collections import Counter
+
+import torch
+import pyro
+import pyro.distributions as dist
+import pyro.distributions.constraints as constraints
+from pyro.nn import PyroModule
+
+from tqdm import tqdm
+from torch.utils.data import Dataset, DataLoader
+
+sys.path.insert(0, '/home/djl34/lab_pd/kl/git/KL/scripts')
+import raklette
+from run_raklette import run_raklette
+from run_raklette import run_raklette_cov
+from run_raklette import TSVDataset
+from others import round_sig
+
+#include rules
+include: "/home/djl34/lab_pd/kl/git/KL/scripts/Snakefile"
+
+factor = 8.0
+
+def get_mem_mb(wildcards, attempt):
+    return attempt * 10000 * factor
+
+###################################################################################################################
+
+KL_data_dir = "/home/djl34/lab_pd/kl/data"
+pd_data_dir = "/home/djl34/lab_pd/data"
+scratch_dir = "/n/scratch3/users/d/djl34"
+
+base_set = ["A", "C", "T", "G"]
+all_chrom_set = [str(x) for x in range(1, 23)]
+chrom_set = all_chrom_set
+# chrom_set = ["4"]
+# chrom_set = ["-2"]
+
+
+even_chrom_set = [str(2 * x) for x in range(1, 12)]
+# chrom_set = even_chrom_set
+
+# cutoff_list = [0, 1, 2, 3, 4, 5]
+
+wildcard_constraints:
+    chrom="\d+",
+    chrom_all="[-+]?\d+",
+    epoch="\d+",
+    interval_min="[+-]?([0-9]*[.])?[0-9]+",
+    interval_max="[+-]?([0-9]*[.])?[0-9]+",
+    samplesize="\d+",
+    count_num="\d+",
+
+file_directory = "single_feature/enhancer/"
+
+###################################################################################################################
+
+header_list = ["nonsense_below_5_pivot_", "nonsense_above_5_pivot_"]
+
+header_list = ["nonsense_pseudocount_100_digit_" + str(i) + "_pivot_" for i in range(10)]
+
+# header_list = ["nonsense_gene_ENSG00000164134_pivot_", "nonsense_gene_ENSG00000164134_highmu_pivot_"]
+# header_list = ["nonsense_gene_ENSG00000164134_highmu_pivot_"]
+
+
+rule all:
+    input:
+        [os.path.join(scratch_dir, "kl_input/" + file_directory + "chr_" + chrom + ".tsv") for chrom in chrom_set],
+        [os.path.join(scratch_dir, "kl_input/" + file_directory + "by_emodule/" + str(emodule) + ".tsv") for emodule in range(300)],
+#         [os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_2bins_chr_" + chrom + "_bygene/done") for chrom in chrom_set],
+#         [os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_2bins_chr_" + chrom + "_bygene/length/done") for chrom in chrom_set],
+#         [os.path.join(KL_data_dir, "raklette_output/" + file_directory + "nonsense_2bins_chr_" + chrom + "_bygene/binsize_2_covonly_lr_0.01_gamma_0.5_epoch_1500_covprior_0.1.done_" + str(digits)) for chrom in chrom_set for digits in range(10)],
+#         [os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_neutral_dist_chr_" + chrom + ".tsv") for chrom in chrom_set],
+#         [os.path.join(KL_data_dir, "raklette_output/" + file_directory + "simple_KL_pseudocount_1_chr_" + chrom + ".tsv") for chrom in chrom_set],
+#         [os.path.join(KL_data_dir, "raklette_output/" + file_directory + header + "chr_" + chrom + "_chunksize_1000000_covonly_lr_0.01_gamma_0.5_epoch_1500_covprior_0.1_KL.tsv") for chrom in chrom_set for header in header_list],
+#         [os.path.join(KL_data_dir, "raklette_output/" + file_directory + header + "chr_" + chrom + "_chunksize_1000000_covonly_lr_0.01_gamma_0.5_epoch_1500_covprior_0.1.pkl") for chrom in chrom_set for header in header_list],
+#         [os.path.join(KL_data_dir, "loeuf/LOEUF_results_gnomADv3_chr_" + chrom + ".tsv") for chrom in chrom_set],
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_shet_0.1_cutoff_chr_0.tsv"),
+#         os.path.join(KL_data_dir, "raklette_output/" + file_directory + "nonsense_shet_0.1_cutoff_chr_0" + "_chunksize_1000000_covonly_lr_0.01_gamma_0.5_epoch_200_covprior_0.1.pkl"),
+#         os.path.join(KL_data_dir, "raklette_output/" + file_directory + "nonsense_shet_below_0.01_chr_0" + "_chunksize_1000000_covonly_lr_0.01_gamma_0.5_epoch_200_covprior_0.1.pkl")
+
+
+########################################## getting column of interest ##############################################
+
+rule make_tsv_file:
+    input:
+        os.path.join(KL_data_dir, "whole_genome/enhancer/{chrom}/_metadata"),
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "chr_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+
+            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+
+            print(rate.columns)
+
+            include_columns = ["mu_index", "Freq_bin_adaptive"]
+            feature_list = ["e_module"]
+            include_columns.extend(feature_list)
+
+            for feature in feature_list:
+                rate = rate[rate[feature].isna() == False]
+                
+            rate = rate[include_columns]
+            
+            rate = rate.rename(columns={"Freq_bin_adaptive": "Freq_bin"})  
+            
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True) 
+                
+########################################## finding KL per enhancer_module ##############################################
+
+rule split_by_emodule:
+    input:
+        rate = [os.path.join(scratch_dir, "kl_input/" + file_directory + "chr_" + chrom + ".tsv") for chrom in chrom_set]
+    output:
+        [os.path.join(scratch_dir, "kl_input/" + file_directory + "by_emodule/" + str(emodule) + ".tsv") for emodule in range(300)]
+    resources:
+        partition="priority",
+        runtime="0-10:00",
+        cpus_per_task=20,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+
+            rate = dd.read_csv(input.rate, sep = "\t")
+
+            for emodule in range(300):
+                rate_emodule = rate[rate["e_module"] == emodule]
+                
+                rate_emodule["e_module"] = 1
+
+                rate_emodule.to_csv("/".join(output[0].split("/")[:-1]) + "/" + str(emodule) + ".tsv", sep = "\t", index = None, single_file = True)
+                
+                
+rule pseudo_counts:
+    input:
+        rate = os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_chr_{chrom}.tsv"),
+        neutral_sfs = os.path.join(KL_data_dir, "whole_genome/allele_freq/adaptive_bins/all.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_pseudocount_{count_num}_chr_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        rate = pd.read_csv(input.rate, sep = "\t")
+        neutral_sfs = pd.read_csv(input.neutral_sfs, sep = "\t")
+        neutral_sfs = neutral_sfs.drop(["mu", "sum"], axis = 1)
+        
+        gene_list = list(rate["Nonsense_Gene"].unique())
+        
+        def get_mu_list(rate, gene):
+            return list(rate[rate["Nonsense_Gene"] == gene]["mu_index"])
+
+        def get_neutral_sfs(neutral_sfs, mu_index, sample_size):
+
+            sfs_segment = pd.DataFrame(neutral_sfs.iloc[mu_index]).reset_index()
+
+            return list(sfs_segment["index"].sample(n = sample_size, weights = sfs_segment[mu_index], replace = True))
+
+        for gene in gene_list:
+            mu_index_sample = random.choices(get_mu_list(rate, gene), k=int(wildcards.count_num))            
+            mu_index_sample.sort()
+            
+            sample_counter = Counter(mu_index_sample)
+
+            freq_bin_list = []
+
+            for i in sample_counter:
+                freq_bin_list.extend(get_neutral_sfs(neutral_sfs, i, sample_counter[i]))
+
+            rate_pseudocount = pd.DataFrame(zip(mu_index_sample, freq_bin_list), columns = ["mu_index", "Freq_bin"])
+            rate_pseudocount["Nonsense_Gene"] = gene
+            
+            rate = pd.concat([rate, rate_pseudocount])
+        
+        rate.to_csv(output[0], sep = "\t", index = None)
+
+rule pivot_by_genes:
+    input:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_chr_{chrom}.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_{cutoff}_pivot_chr_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        rate = pd.read_csv(input[0], sep = "\t")
+        
+        rate["exist"] = 1
+        
+        rate["last_digit"] = rate["Nonsense_Gene"].str.strip().str[-1].astype(int)
+        
+        if wildcards.cutoff == "below_5":
+            rate = rate[rate["last_digit"] <= 5]
+        elif wildcards.cutoff == "above_5":
+            rate = rate[rate["last_digit"] > 5]
+        elif "digit" in wildcards.cutoff:
+            digit = int(wildcards.cutoff.split("_")[-1])
+            rate = rate[rate["last_digit"] == digit]
+        elif "gene" in wildcards.cutoff:
+            gene = wildcards.cutoff.split("_")[-1]
+            rate = rate[rate["Nonsense_Gene"] == gene]
+            
+        rate_pivot = rate.pivot(values = "exist", columns='Nonsense_Gene')
+        
+        rate_pivot = rate_pivot.fillna(0)
+        
+        rate_pivot.insert(0, 'Freq_bin', rate["Freq_bin"])
+        rate_pivot.insert(0, 'mu_index', rate["mu_index"])
+
+        rate_pivot.to_csv(output[0], sep = "\t", index = None)
+        
+
+        
+rule get_KL_by_genes:
+    input:
+        data = os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_{cutoff}_pivot_chr_{chrom}.tsv"),
+        result = os.path.join(KL_data_dir, "raklette_output/" + file_directory + "nonsense_{cutoff}_pivot_chr_{chrom}_chunksize_{chunksize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}.pkl"),
+        model = os.path.join(KL_data_dir, "raklette_output/" + file_directory + "nonsense_{cutoff}_pivot_chr_{chrom}_chunksize_{chunksize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}.model")
+    output:
+        os.path.join(KL_data_dir, "raklette_output/" + file_directory + "nonsense_{cutoff}_pivot_chr_{chrom}_chunksize_{chunksize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}_KL.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        with open(input.result, 'rb') as handle:
+            result = pickle.load(handle)
+            
+        with open(input.model, 'rb') as handle:
+            dictionary = pickle.load(handle)
+            
+        ref_mu_ii = result["ref_mu_ii"]
+        neut_sfs_full = result["neut_sfs_full"]
+        
+        KL = dictionary["KL"]
+        guide = dictionary["guide"]
+
+        beta_neut = KL.beta_neut
+        beta_neut_full = KL.beta_neut_full
+        
+        ## get beta_cov median, quantiles 0.05, quantile 0.95
+        beta_cov = guide.median()['beta_cov']
+        beta_cov_trans = torch.cumsum(beta_cov, dim=-1)
+        
+        beta_cov_5 = guide.quantiles(0.05)['beta_cov']
+        beta_cov_trans_5 = torch.cumsum(beta_cov_5, dim=-1)
+        
+        beta_cov_95 = guide.quantiles(0.95)['beta_cov']
+        beta_cov_trans_95 = torch.cumsum(beta_cov_95, dim=-1)
+        
+        ## calculate posterior probs
+        post_probs = raklette.softmax(raklette.pad(beta_neut - beta_cov_trans)).detach().numpy()
+        
+        KL_fw_post = raklette.KL_fw(neut_sfs_full[ref_mu_ii,:].detach().numpy(), post_probs)
+        KL_rv_post = raklette.KL_rv(neut_sfs_full[ref_mu_ii,:].detach().numpy(), post_probs)
+        
+        df = pd.read_csv(input.data, sep = "\t")
+        
+        df = pd.DataFrame(zip(list(df.columns[2:]), list(KL_fw_post), list(KL_rv_post)), columns = ["Gene", "KL_fw", "KL_rv"])
+        
+        ## add 0.05 and 0.95 quantiles
+        post_probs = raklette.softmax(raklette.pad(beta_neut - beta_cov_trans_5)).detach().numpy()
+        
+        KL_fw_post = raklette.KL_fw(neut_sfs_full[ref_mu_ii,:].detach().numpy(), post_probs)
+        KL_rv_post = raklette.KL_rv(neut_sfs_full[ref_mu_ii,:].detach().numpy(), post_probs)
+        
+        df["KL_fw_05"] = list(KL_fw_post[0])
+        df["KL_rv_05"] = list(KL_rv_post[0])
+        
+        post_probs = raklette.softmax(raklette.pad(beta_neut - beta_cov_trans_95)).detach().numpy()
+        
+        KL_fw_post = raklette.KL_fw(neut_sfs_full[ref_mu_ii,:].detach().numpy(), post_probs)
+        KL_rv_post = raklette.KL_rv(neut_sfs_full[ref_mu_ii,:].detach().numpy(), post_probs)
+        
+        df["KL_fw_95"] = list(KL_fw_post[0])
+        df["KL_rv_95"] = list(KL_rv_post[0])
+        
+        
+        df.to_csv(output[0], sep = "\t", index = None)
+        
+#####################################################################################################################
+
+########################################## nonsense mutations together ##############################################        
+rule cutoff_point_one:
+    input:
+        rates = [os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_chr_" + chrom + ".tsv") for chrom in all_chrom_set],
+        shet = pd_data_dir + "/shet_gnomAD_Roulette_0.01cutoff_v2.csv"
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_shet_0.1_cutoff_chr_0.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            rate = dd.read_csv(input.rates, sep = "\t")
+            
+            shet = pd.read_csv(input.shet)
+            gene_list = (shet[shet["mean_s_het"] > 0.1]["Gene_stable_ID"])
+            
+            rate = rate[rate["Nonsense_Gene"].isin(gene_list)]
+            
+            rate["shet_0.1"] = 1
+            
+            include_columns = ["mu_index", "Freq_bin"]
+            feature_list = ["shet_0.1"]
+            include_columns.extend(feature_list)
+            
+            rate = rate[include_columns]
+
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+            
+rule cutoff_point_zero_one:
+    input:
+        rates = [os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_chr_" + chrom + ".tsv") for chrom in all_chrom_set],
+        shet = pd_data_dir + "/shet_gnomAD_Roulette_0.01cutoff_v2.csv"
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_shet_below_0.01_chr_0.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            rate = dd.read_csv(input.rates, sep = "\t")
+            
+            shet = pd.read_csv(input.shet)
+            gene_list = (shet[shet["mean_s_het"] <0.01]["Gene_stable_ID"])
+            
+            rate = rate[rate["Nonsense_Gene"].isin(gene_list)]
+            
+            rate["below_shet_0.01"] = 1
+            
+            include_columns = ["mu_index", "Freq_bin"]
+            feature_list = ["below_shet_0.01"]
+            include_columns.extend(feature_list)
+            
+            rate = rate[include_columns]
+
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True) 
+
+#####################################################################################################################
+
+########################################## calculate LOEUF ##########################################################        
+rule calculate_LOEUF:
+    input:
+        rates = os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_AC_chr_{chrom}.tsv"),
+        neutral_sfs = os.path.join(KL_data_dir, "whole_genome/allele_freq/adaptive_bins/all.tsv"),
+    output:
+        os.path.join(KL_data_dir, "loeuf/LOEUF_results_gnomADv3_chr_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+
+            rate = pd.read_csv(input.rates, sep = "\t")
+                        
+            neutral_sfs = pd.read_csv(input.neutral_sfs, sep = "\t")
+            
+            neutral_sfs = neutral_sfs.rename({"0.0": "p_monomorphic"}, axis = 1)
+
+            neutral_sfs["p_polymorphic"] = 1 - neutral_sfs["p_monomorphic"]
+
+            rate = rate.merge(neutral_sfs[["mu", "p_polymorphic"]], how = "left", on = "mu")
+
+            rate["obs_polymorphic"] = rate["Freq_bin"].astype(bool).astype(int)
+            
+            rate_pergene = rate[["Nonsense_Gene", "p_polymorphic", "obs_polymorphic"]].groupby("Nonsense_Gene").sum()
+            
+            rate_pergene = rate_pergene.reset_index()
+            
+            from scipy.stats import poisson
+
+            def get_upper_bound(count, expected):
+
+                k = count
+
+                lambd_list = np.linspace(0,2,2001)
+                pmf = [poisson.pmf(k, lambd * expected) for lambd in lambd_list]
+                dist_df = pd.DataFrame(zip(lambd_list, pmf), columns = ["Lambda", "pmf"])
+
+                dist_df["pmf"] = dist_df["pmf"]/dist_df["pmf"].sum()
+                dist_df["cdf"] = np.cumsum(dist_df["pmf"])
+
+                dist_df_upper = dist_df[(dist_df["cdf"] < 0.95)]
+
+                upper_bound = dist_df_upper[dist_df_upper["cdf"] == dist_df_upper["cdf"].max()]
+
+                return upper_bound
+            
+            rate_pergene['LOEUF'] = rate_pergene.apply(lambda row: get_upper_bound(row["obs_polymorphic"], row["p_polymorphic"]), axis = 1)
+
+            rate_pergene.to_csv(output[0], sep = "\t", index = None) 
