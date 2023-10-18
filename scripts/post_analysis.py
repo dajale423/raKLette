@@ -49,5 +49,27 @@ def get_n_sites(file_header):
     df = pd.read_csv(variants, sep = "\t", header = None)
         
     return int(df.iloc[0, 0])
+
+def freq_bin_to_AF_range(bin_num):
+    if bin_num == 0:
+        return "0"
+    elif bin_num == 1:
+        return "<1e-05 (singleton)"
+    elif bin_num == 2:
+        return "<1.7e-05 (doubleton)"
+    elif bin_num == 3:
+        return "<2.3e-05 (tripleton)"
+    elif bin_num == 4:
+        return "<3.6e-05"
+    elif bin_num == 5:
+        return "<8e-05"
+    elif bin_num == 6:
+        return "<5e-04"
+    elif bin_num == 7:
+        return "<5e-03"
+    elif bin_num == 8:
+        return "<5e-02"
+    elif bin_num == 9:
+        return "<0.5"
     
     
