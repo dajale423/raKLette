@@ -178,7 +178,6 @@ class WinSFS:
         beta_bs = np.cumsum(alpha_bs, axis=1)
         ZZ_bs = np.sum(np.exp(self.beta_0 - beta_bs[:,None,:]), -1)
         fit_probs_bs = np.exp(self.beta_0_0 - np.hstack((np.zeros((n_bs, 1)), beta_bs))[:,None,:]) / (1 + ZZ_bs[:,:,None])
-        # print(fit_probs_bs.shape, ZZ_bs.shape)
         # return the inferred latent SFS for each bootstrap sample
         return alpha_bs, fit_probs_bs
         

@@ -155,7 +155,7 @@ def bin_sizes(bins):
     Parameters
     ----------
     bins : array_like
-        The set of bins.
+        The set of bin boundaries.
 
     Returns
     -------
@@ -165,6 +165,59 @@ def bin_sizes(bins):
     result = np.zeros(len(bins)-1)
     for ii in range(1, len(bins)):
         result[ii-1] = bins[ii] - bins[ii-1]
+    return result
+
+def bin_vector(sfs, bins):
+    """
+    Take a vector of counts and bin them according to the provided bins.
+    Return a vector of binned counts, where entries indicate which bin the
+    corresponding count was binned into.
+
+    Parameters
+    ----------
+    sfs : array_like
+        The vector of counts.
+    bins : array_like
+        The set of bins boundaries.
+
+    Returns
+    -------
+    result : array_like
+        The vector of binned counts.
+    """
+    result = np.zeros(len(sfs), dtype=int)
+    for ii in range(1, len(bins)):
+        result[(sfs >= bins[ii-1]) & (sfs < bins[ii])] = ii-1
+    return result
+
+def bin_vector_by_mu(sfs, mu, mu_vals, bins):
+    """
+    Take a vector of counts and a vector of mutation rates and bin the counts
+    according to the provided bins, separately for each unique mutation rate.
+    Return an array (n_mu x n_bins) of binned counts, where entries indicate
+    which bin the corresponding count was binned into.
+
+    Parameters
+    ----------
+    sfs : array_like
+        The vector of counts.
+    mu : array_like
+        The vector of mutation rates.
+    mu_vals : array_like
+        The unique mutation rates.
+    bins : array_like
+        The set of bins boundaries.
+
+    Returns
+    -------
+    result : array_like (n_mu x n_bins)
+        The array of binned counts.
+    """
+    result = np.zeros((len(mu_vals), len(bins)-1), dtype=int)
+    for ii in range(len(mu_vals)):
+        if np.sum(mu==mu_vals[ii]) > 0:
+            print(mu_vals[ii], sfs[mu==mu_vals[ii]].shape)
+            result[ii] = bin_vector(sfs[mu==mu_vals[ii]], bins)
     return result
 
 def multinomial_trans(sfs_probs, offset=None):
@@ -265,6 +318,11 @@ def simple_mu_dist(nn):
     sim_mu_dist = sim_mu_dist / np.sum(sim_mu_dist)
     return np.random.choice(mu_vals, size=nn, p=sim_mu_dist)
 
+simple_mu_pmf = np.array([1e5,1e6,2e6,
+                          1e6,1e5,1e3,
+                          2e3,5e4,2e3])
+simple_mu_pmf = simple_mu_pmf / np.sum(simple_mu_pmf)
+
 class simPile:
     """
     A class for storing and using SFS simulations over a grid of selection
@@ -332,6 +390,39 @@ class simPile:
         self.neutral_betas_binned = None
         self.betas_binned = None
 
+    def calc_KL_pmf(self, pmf, ref_mu):
+        # Check that the pmf is the right length: one value for each selection coefficient
+        assert len(pmf) == self.n_s
+        # Check that the pmf sums to one
+        assert np.abs(np.sum(pmf) - 1) < 1e-8
+        # make sure there is a neutral simulation
+        assert self.has_neutral
+
+        # get the index of the reference mutation rate
+        ref_mu_ind = np.argmin(np.abs(self.mu_set[:, np.newaxis] - ref_mu), axis=0)[0]
+        
+        # get the KL divergence between the pmf and the DFE
+        dfe_sfs = np.sum(self.sfs_set[ref_mu_ind]*pmf[:,None], axis=0)
+        neut_sfs = self.sfs_set[ref_mu_ind, self.neutral_index]
+        neut_sfs = neut_sfs[dfe_sfs>0]
+        dfe_sfs = dfe_sfs[dfe_sfs>0]
+        return np.sum(dfe_sfs*np.log(dfe_sfs/neut_sfs))        
+
+    def calc_KL_shet_sample(self, shet_vals, ref_mu):
+        """
+        Calculate the KL divergence between the selected and neutral distributions
+        using the sample of shet_vals as a probability distribution over selection
+        coefficients.
+        """
+        # make sure there is a neutral simulation
+        assert self.has_neutral
+
+        # generate the pmf and use it to calculate the KL divergence
+        shet_inds = np.argmin(np.abs(self.shet_set[:, np.newaxis] - shet_vals), axis=0)
+        shet_counts = np.bincount(shet_inds, minlength=len(self.shet_set))
+        sample_shet_dist = shet_counts/np.sum(shet_counts)
+        return self.calc_KL_pmf(sample_shet_dist, ref_mu)
+
     def downsample(self, sample_size=2*70000, tv_sd=0.05, row_eps=1e-8):
         """
         Use fastDTWF to apply hypergeometric sampling to the SFS simulations.
@@ -352,7 +443,7 @@ class simPile:
         new_sim_pile = simPile(new_sfs_set, self.mu_set, self.shet_set)
         return new_sim_pile
 
-    def sample(self, mu_vals, s_vals, bin_sfs=False, return_grid=False):
+    def sample(self, mu_vals, s_vals, bin_sfs=False, return_grid=False, batch_max=20000):
         """
         Generate a sample of allele frequencies using the probability distribution
         implied by the SFS simulations.
@@ -366,7 +457,9 @@ class simPile:
             The selection coefficients for each sample.
             (n) array.
         bin_sfs : bool, optional
-            Whether to use the SFS for sampling, if available. Default is False.
+            Whether to use the binned SFS for sampling, if available. Default is False.
+        return_grid : bool, optional
+            Whether to return the mutation rate and selection coefficient for each sample.
 
         Returns
         -------
@@ -387,16 +480,50 @@ class simPile:
             # check if the SFS has been binned
             if self.binned_sfs is None:
                 raise ValueError("SFS has not been binned.")
-            sfs_cumsum = self.binned_sfs_cumsum[mu_ind, s_ind, :]
+            nonzero_samples = ~np.random.binomial(1, self.binned_sfs_cumsum[mu_ind, s_ind, 0]).astype(bool)
+            sfs_cumsum = (self.binned_sfs_cumsum[mu_ind[nonzero_samples], s_ind[nonzero_samples], 1:] - 
+                          self.binned_sfs_cumsum[mu_ind[nonzero_samples], s_ind[nonzero_samples], 0][:, None]) / \
+                            (1-self.binned_sfs_cumsum[mu_ind[nonzero_samples], s_ind[nonzero_samples], 0][:, None])
         else:
-            sfs_cumsum = self.sfs_cumsum[mu_ind, s_ind, :]
+            # When the number of entries in the SFS is large this can generate
+            # a gigantic array. We should find a way to avoid this.
+            if len(mu_ind)>batch_max:
+                # split the indices into batches that we will combine at the end
+                mu_ind_batches = np.array_split(mu_ind, np.ceil(len(mu_ind)/batch_max))
+                s_ind_batches = np.array_split(s_ind, np.ceil(len(s_ind)/batch_max))
+                result = np.array([], dtype=int)
+                for ii in range(len(mu_ind_batches)):
+                    nonzero_samples = ~np.random.binomial(1, self.sfs_cumsum[mu_ind_batches[ii], 
+                                                                             s_ind_batches[ii], 0]).astype(bool)
+                    sfs_cumsum = (self.sfs_cumsum[mu_ind_batches[ii][nonzero_samples], s_ind_batches[ii][nonzero_samples], 1:] - 
+                                  self.sfs_cumsum[mu_ind_batches[ii][nonzero_samples], s_ind_batches[ii][nonzero_samples], 0][:, None]) / \
+                                    (1-self.sfs_cumsum[mu_ind_batches[ii][nonzero_samples], s_ind_batches[ii][nonzero_samples], 0][:, None])
+                    nn = np.sum(nonzero_samples)
+                    result_add = np.zeros(len(mu_ind_batches[ii]))
+                    result_add[nonzero_samples] = np.sum(sfs_cumsum < np.random.rand(nn, 1), axis=1) + 1
+                    result = np.concatenate((result, result_add))
+                if return_grid:
+                    return result, self.mu_set[mu_ind], self.shet_set[s_ind], mu_ind, s_ind
+                else:
+                    return result
+            else:
+                nonzero_samples = ~np.random.binomial(1, self.sfs_cumsum[mu_ind, s_ind, 0]).astype(bool)
+                sfs_cumsum = (self.sfs_cumsum[mu_ind[nonzero_samples], s_ind[nonzero_samples], 1:] - 
+                              self.sfs_cumsum[mu_ind[nonzero_samples], s_ind[nonzero_samples], 0][:, None]) / \
+                                (1-self.sfs_cumsum[mu_ind[nonzero_samples], s_ind[nonzero_samples], 0][:, None])
 
-        nn = len(mu_vals)
-        random_values = np.random.rand(nn, 1)
-        sample = np.sum(sfs_cumsum < random_values, axis=1)
+        # sample multinomial trials for the non-zero-frequency classes
+        nn = np.sum(nonzero_samples)
+        result = np.zeros(len(mu_ind), dtype=int)
+        # add one to account for restricting to polymorphic sfs
+        result[nonzero_samples] = np.sum(sfs_cumsum < np.random.rand(nn, 1), axis=1) + 1 
+    
+        # nn = len(mu_vals)
+        # random_values = np.random.rand(nn, 1)
+        # result = np.sum(sfs_cumsum < random_values, axis=1)
         if return_grid:
-            return sample, self.mu_set[mu_ind], self.shet_set[s_ind], mu_ind, s_ind
-        return sample
+            return result, self.mu_set[mu_ind], self.shet_set[s_ind], mu_ind, s_ind
+        return result
 
 
     def get_neutral_betas(self, bin_sfs=False):
@@ -447,7 +574,87 @@ class simPile:
                 neutral_betas = self.neutral_betas
             betas = multinomial_trans(self.sfs_set, offset=neutral_betas[:,None,:])
             self.betas = betas
-        return betas            
+        return betas
+    
+    def bin_sfs_adaptive(self, mu_probs, sample_size, count_min, incl_zero=True):
+            """
+            Bins the site frequency spectrum (SFS) using an adaptive binning method.
+
+            Args:
+                mu_probs (ndarray): Array of mutation rate probabilities.
+                sample_size (int): Sample size.
+                count_min (float): Minimum expected neutral count for a bin.
+                incl_zero (bool, optional): Whether to include the zero-frequency class. Defaults to True.
+
+            Returns:
+                ndarray: Binned SFS.
+
+            This method takes in an array of mutation rate probabilities, a sample size, a minimum count for a bin, 
+            and a boolean indicating whether to include the zero-frequency class. It returns the binned site frequency spectrum (SFS) 
+            using an adaptive binning method.
+
+            The method first computes the neutral SFS integrated over the mutation rate distribution and the SFS for each mutation rate. 
+            It then computes the cumulative sum of the neutral SFS and uses it to determine the bin boundaries. 
+            The binned SFS is then computed and normalized to be a probability distribution.
+            """
+
+            # TODO: Merge this with bin_sfs() method to avoid code duplication and allow various binning methods to be used.
+
+            if not incl_zero:
+                raise NotImplementedError("incl_zero=False not implemented for adaptive binning.")
+            assert len(mu_probs) == self.n_m
+            assert count_min > 0
+
+            # compute the neutral SFS integrated over the mutation rate distribution
+            # and the SFS for each mutation rate
+            neutral_sfs = np.sum(self.sfs_set[:,self.neutral_index,1:]*mu_probs[:,None], axis=0) * sample_size
+
+            # compute the cumulative sum of the neutral SFS
+            neutral_sfs_cumsum = np.cumsum(neutral_sfs)
+
+            bins = []
+            try:
+                bins.append(np.where(neutral_sfs_cumsum >= count_min)[0][0])
+            except IndexError:
+                bins.append(self.n_k-2)
+        
+            neutral_sfs_cumsum -= neutral_sfs_cumsum[bins[0]]
+            while neutral_sfs_cumsum[-1] > count_min:
+                bins.append(np.where(neutral_sfs_cumsum >= count_min)[0][0])
+                neutral_sfs_cumsum -= neutral_sfs_cumsum[bins[-1]]
+
+            bins[-1] = self.n_k-3
+            # Add the zero and one boundaries and 
+            # then put bin boundaries back in zero-based, upper exclusive indexing
+            bins = np.array([-2, -1] + bins, dtype=int)
+            bins += 2
+
+            # initialize the binned SFS
+            binned_sfs = np.zeros((self.n_m, self.n_s, len(bins)-1))
+            binned_sfs = self.sfs_set[...,bins[:-1]] + \
+                            np.diff(self.sfs_cumsum[..., bins], axis=-1) - \
+                                self.sfs_set[...,bins[1:]]
+            binned_sfs[...,-1] += self.sfs_set[...,bins[-1]]
+
+            # Bin the neutral_sfs we computed above using the same procedure we just
+            # applied to self.sfs_set.
+            neutral_sfs_zero = np.sum(self.sfs_set[:,self.neutral_index,:]*mu_probs[:,None], axis=0) * sample_size
+            neutral_sfs_binned = neutral_sfs_zero[bins[:-1]] + \
+                            np.diff(np.cumsum(neutral_sfs_zero)[bins]) - \
+                                neutral_sfs_zero[bins[1:]]
+            neutral_sfs_binned[-1] += neutral_sfs_zero[bins[-1]]
+
+            # normalize the binned SFS to be a probability distribution in case zero-frequency class is excluded
+            # if not incl_zero: # DOES NOTHING AT PRESENT
+            #     binned_sfs /= np.sum(binned_sfs, axis=2)[:,:,None]
+
+            self.binned_sfs = binned_sfs
+            self.binned_sfs_cumsum = np.cumsum(binned_sfs, axis=-1)
+            self.bins = bins
+            self.bin_means = bin_means(bins)
+            self.bin_sizes = bin_sizes(bins)
+
+            return binned_sfs, neutral_sfs_binned
 
     def bin_sfs(self, jmin, bb, incl_zero=True):
         """
@@ -485,8 +692,8 @@ class simPile:
         binned_sfs[...,-1] += self.sfs_set[...,bins[-1]]
 
         # normalize the binned SFS to be a probability distribution in case zero-frequency class is excluded
-        if not incl_zero:
-            binned_sfs /= np.sum(binned_sfs, axis=2)[:,:,None]
+        # if not incl_zero:
+        #     binned_sfs /= np.sum(binned_sfs, axis=2)[:,:,None]
         
         self.binned_sfs = binned_sfs
         self.binned_sfs_cumsum = np.cumsum(binned_sfs, axis=-1)
@@ -788,53 +995,52 @@ class windowSim(selectionSim):
         return KL
 
     def make_sample(self, n_windows):
-            """
-            Generate a sample of simulated data for a given number of windows.
+        """
+        Generate a sample of simulated data for a given number of windows.
 
-            Parameters:
-            n_windows (int): The number of windows to generate data for.
+        Parameters:
+        n_windows (int): The number of windows to generate data for.
 
-            Returns:
-            tuple: A tuple containing four arrays:
-                - A 3D array of shape (n_windows, n_mu, n_shet), 
-                  where n_mu and n_shet are the number of mutation rates and selection coefficients respectively. 
-                  This array contains the simulated allele frequencies for each window.
-                - A 1D array of length n_windows containing the KL divergence between the DFE and neutrality for each window.
-                - A 2D array of shape (n_windows, window_size) containing the mutation rates for each window.
-                - A 2D array of shape (n_windows, window_size) containing the selection coefficients for each window.
-            """
-            result = np.zeros((n_windows,) + self.dfe_sfs.shape, dtype=int)
-            result_KL = np.zeros(n_windows)
-            result_shet = np.zeros((n_windows, self.window_size))
-            result_mu = np.zeros((n_windows, self.window_size))
-            #TODO: somehow speed this up by removing the loop
-            for ii in range(n_windows):
-                # sample a set of mutation rates
-                mu_vals = self.mu_dist(self.window_size)
-                # sample a set of selection coefficients
-                shet_vals = np.power(10, self.dfe.sample(self.window_size))
-                # sample allele frequencies
-                freqs, mu_grid, shet_grid, _, shet_ind = self.sfs_pile.sample(mu_vals, shet_vals, 
-                                                                 bin_sfs=self.bin_sfs, return_grid=True)
-                result[ii] = reshape_counts(freqs, mu_grid, self.sfs_pile.mu_set, 
-                                            len(self.sfs_pile.bin_means))
-                # compute the KL divergence between the DFE and neutrality
-                # count the number of times each shet value is sampled
-                shet_counts = np.bincount(shet_ind, minlength=len(self.sfs_pile.shet_set))
-                sample_shet_dist = shet_counts/np.sum(shet_counts)
-                # get the KL divergence between the sampled shet distribution and the DFE
-                if self.bin_sfs:
-                    dfe_sfs = np.sum(self.sfs_pile.binned_sfs[self.mu_ind]*
-                                     sample_shet_dist[:,None], axis=0)
-                else:
-                    dfe_sfs = np.sum(self.sfs_pile.sfs_set[self.mu_ind]*
-                                     sample_shet_dist[:,None], axis=0)
-                neut_sfs = self.neut_sfs[dfe_sfs>0]
-                dfe_sfs = dfe_sfs[dfe_sfs>0]
-                result_KL[ii] = np.sum(dfe_sfs*np.log(dfe_sfs/neut_sfs))
-                result_shet[ii] = shet_grid
-                result_mu[ii] = mu_grid
-            return result, result_KL, result_mu, result_shet
+        Returns:
+        tuple: A tuple containing four arrays:
+            - A 3D array of shape (n_windows, n_mu, n_shet), 
+                where n_mu and n_shet are the number of mutation rates and selection coefficients respectively. 
+                This array contains the simulated allele frequencies for each window.
+            - A 1D array of length n_windows containing the KL divergence between the DFE and neutrality for each window.
+            - A 2D array of shape (n_windows, window_size) containing the mutation rates for each window.
+            - A 2D array of shape (n_windows, window_size) containing the selection coefficients for each window.
+        """
+        result = np.zeros((n_windows,) + self.dfe_sfs.shape, dtype=int)
+        result_KL = np.zeros(n_windows)
+        result_shet = np.zeros((n_windows, self.window_size))
+        result_mu = np.zeros((n_windows, self.window_size))
+        for ii in range(n_windows):
+            # sample a set of mutation rates
+            mu_vals = self.mu_dist(self.window_size)
+            # sample a set of selection coefficients
+            shet_vals = np.power(10, self.dfe.sample(self.window_size))
+            # sample allele frequencies
+            freqs, mu_grid, shet_grid, _, shet_ind = self.sfs_pile.sample(mu_vals, shet_vals, 
+                                                                          bin_sfs=self.bin_sfs, return_grid=True)
+            result[ii] = reshape_counts(freqs, mu_grid, self.sfs_pile.mu_set, 
+                                        len(self.sfs_pile.bin_means))
+            # compute the KL divergence between the DFE and neutrality
+            # count the number of times each shet value is sampled
+            shet_counts = np.bincount(shet_ind, minlength=len(self.sfs_pile.shet_set))
+            sample_shet_dist = shet_counts/np.sum(shet_counts)
+            # get the KL divergence between the sampled shet distribution and the DFE
+            if self.bin_sfs:
+                dfe_sfs = np.sum(self.sfs_pile.binned_sfs[self.mu_ind]*
+                                    sample_shet_dist[:,None], axis=0)
+            else:
+                dfe_sfs = np.sum(self.sfs_pile.sfs_set[self.mu_ind]*
+                                    sample_shet_dist[:,None], axis=0)
+            neut_sfs = self.neut_sfs[dfe_sfs>0]
+            dfe_sfs = dfe_sfs[dfe_sfs>0]
+            result_KL[ii] = np.sum(dfe_sfs*np.log(dfe_sfs/neut_sfs))
+            result_shet[ii] = shet_grid
+            result_mu[ii] = mu_grid
+        return result, result_KL, result_mu, result_shet
     
 def reshape_counts(freq_bins, mu_grid, mu_vals, n_k):
     """
@@ -849,8 +1055,11 @@ def reshape_counts(freq_bins, mu_grid, mu_vals, n_k):
     mu_grid : array_like
         The mutation rates
         n_l array, where n_l is the number of simulated sites
-    max_bin : int
-        The maximum allele frequency bin.
+    mu_vals : array_like
+        The mutation rates
+        n_m array, where n_m is the number of mutation rates
+    n_k : int
+        The number of allele frequency bins
 
     Returns
     -------
@@ -861,11 +1070,6 @@ def reshape_counts(freq_bins, mu_grid, mu_vals, n_k):
     """
     # check that all mu_grid are in mu_vals
     assert np.all(np.isin(mu_grid, mu_vals))
-
-    # result = np.zeros((len(mu_vals), n_k), dtype=int)
-    # for ii in range(len(mu_vals)):
-    #     result[ii] = np.bincount(freq_bins[mu_grid==mu_vals[ii]], minlength=n_k)
-    # return result
 
     mask = mu_grid[:, np.newaxis] == mu_vals
 
@@ -913,7 +1117,7 @@ def calc_comparison(window_sim, win_sfs, counts):
               "KL_dfe": KL_dfe}
     return result
 
-def plot_KL(KL_set, KL_set_neut, KL_sim, ax):
+def plot_KL(KL_set, KL_set_neut, KL_sim, ax, sim_bin_sizes):
     """
     Plots KL divergence values for a given set of data.
 
@@ -927,7 +1131,7 @@ def plot_KL(KL_set, KL_set_neut, KL_sim, ax):
     None
     """
     
-    bin_sizes_plot = ["max"] + bin_sizes[1:]
+    bin_sizes_plot = ["max"] + sim_bin_sizes[1:]
     ax.violinplot(KL_set_neut.T, positions=np.arange(1, len(bin_sizes_plot)+1),
             widths=0.6, showmedians=True, showextrema=False);
     # ax.boxplot(KL_set_neut.T, positions=np.arange(1, len(bin_sizes_plot)+1),
@@ -944,15 +1148,16 @@ def plot_KL(KL_set, KL_set_neut, KL_sim, ax):
     ax.set_ylabel("KL divergence");
     # label the x-axis
     ax.set_xlabel("bin size");
-    ax.set_yscale("symlog", linthresh=2e-3)
+    #ax.set_yscale("symlog", linthresh=2e-3)
     # increase the size of the y-axis ticks
     ax.tick_params(axis='y', which='major', labelsize=16)
     # increase the size of the x-axis ticks
     ax.tick_params(axis='x', which='major', labelsize=16)
     # add more ticks to the y-axis
-    ax.yaxis.set_major_locator(plt.MaxNLocator(10))
+    # ax.yaxis.set_major_locator(plt.MaxNLocator(10))
 
-def run_test(sim_pile_test, sample_size, dfe, n_sites=100000, bin_sizes=bin_sizes, neut_p=0):
+def run_test(sim_pile_test, sample_size, dfe, n_sites, 
+             bin_sizes=None, adaptive_bins=None, neut_p=0):
     """
     Runs a simulation test using the provided parameters and returns the KL divergence values.
 
@@ -965,14 +1170,23 @@ def run_test(sim_pile_test, sample_size, dfe, n_sites=100000, bin_sizes=bin_size
     - neut_p: a float representing the proportion of neutral sites
 
     Returns:
-    - KL_set: a numpy array of shape (len(bin_sizes), sample_size) representing the KL divergence values for each sample and bin size
-    - KL_sim: a numpy array of shape (len(bin_sizes), sample_size) representing the KL divergence values for each sample and bin size using the simulated data
+    - KL_set: a numpy array of shape (len(bin_sizes), sample_size) 
+              representing the KL divergence values for each sample and bin size
+    - KL_sim: a numpy array of shape (len(bin_sizes), sample_size) 
+              representing the KL divergence values for each sample and bin size using the simulated data
     """
+    bin_params = bin_sizes if adaptive_bins is None else adaptive_bins
     
-    KL_set = np.zeros((len(bin_sizes), sample_size))
-    KL_sim = np.zeros((len(bin_sizes), sample_size))
-    for ii in range(len(bin_sizes)):
-        bin_test = sim_pile_test.bin_sfs(1, bin_sizes[ii])
+    KL_set = np.zeros((len(bin_params), sample_size))
+    KL_sim = np.zeros((len(bin_params), sample_size))
+
+    for ii, bin_param in enumerate(bin_params):
+        if adaptive_bins is None:
+            bin_test = sim_pile_test.bin_sfs(1, bin_param)
+        else:
+            bin_test = sim_pile_test.bin_sfs_adaptive(simple_mu_pmf,
+                                                      n_sites,
+                                                      bin_param)
         bin_betas_test = sim_pile_test.get_betas(bin_sfs=True)
 
         window_test = windowSim(sim_pile_test, simple_mu_dist, n_sites, 
