@@ -23,27 +23,112 @@ base_set = ["A", "C", "T", "G"]
 chrom_set = [str(x) for x in range(1, 23)]
 # chrom_set = ["22"]
 
+def get_mem_mb(wildcards, attempt):
+    return attempt * 25000
+
 wildcard_constraints:
     chrom="\d+"
     
+##############################################################################################################################
+
+# annotation_file = "spliceai_grch38.txt"
+
+# df_annot = pd.read_csv(pd_data_dir + "/" + annotation_file, sep = "\t")
+# spliceai_gene_list = list(df_annot[df_annot["CHROM"].isin(chrom_set)]["#NAME"])
+# spliceai_gene_list = spliceai_gene_list[:5]
+
+
+##############################################################################################################################
+
 rule all:
     input:
-        [os.path.join(scratch_dir, "downloads/gnomad.genomes.v3.1.2.sites.chr" + chrom +".vcf.bgz") for chrom in chrom_set],
-        [os.path.join(scratch_dir, "downloads/gnomad.genomes.v3.1.2.sites.chr" + chrom +".vcf.bgz.tbi") for chrom in chrom_set],
-        [os.path.join(scratch_dir, "downloads/gnomad.genomes.v3.1.2.sites.chr" + chrom +".tsv") for chrom in chrom_set],
-        [os.path.join(pd_data_dir, "gnomadv3.1.2/AC/" + chrom + "/_metadata") for chrom in chrom_set],
-        os.path.join(scratch_dir, "downloads/gnomad.genomes.r3.0.1.coverage.summary.tsv.bgz"),
-        os.path.join(scratch_dir, "downloads/gnomad.genomes.r3.0.1.coverage.summary.tsv"),
-        [os.path.join(pd_data_dir, "gnomadv3.1.2/gnomad.genomes.r3.0.1.coverage.summary.chr" + chrom +".tsv") for chrom in chrom_set],
-#         os.path.join(scratch_dir, "zoonomia/cactus241way.phyloP.bw"),
-#         [os.path.join(scratch_dir, "zoonomia/cactus241way.phyloP_chr" + chrom +".wig") for chrom in chrom_set],
-        os.path.join(scratch_dir, "downloads/epimap/personal.broadinstitute.org/cboix/epimap/ChromHMM/observed_aux_18_hg38/CALLS/BSS00001_18_CALLS_segments.bed.gz")        
+        [os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.sites.chr" + chrom +".vcf.bgz") for chrom in chrom_set],
+        [os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.sites.chr" + chrom +".vcf.bgz.tbi") for chrom in chrom_set],
+        os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.coverage.summary.tsv.bgz")
+#         [os.path.join(scratch_dir, "downloads/gnomad.genomes.v3.1.2.sites.chr" + chrom +".vcf.bgz.tbi") for chrom in chrom_set],
+#         [os.path.join(scratch_dir, "downloads/gnomad.genomes.v3.1.2.sites.chr" + chrom +".tsv") for chrom in chrom_set], 
 
+########################################## get recombination rate track #######################################################
+
+rule download_recombination:
+    input:
+    output:
+        os.path.join(scratch_dir, "downloads/recombAvg.bw"),
+    resources:
+        partition="short",
+        runtime="0-10:00",
+        cpus_per_task=5,
+        mem_mb=20000
+    run:
+        shell("wget -P /home/djl34/scratch/downloads/ http://hgdownload.soe.ucsc.edu/gbdb/hg38/recombRate/recombAvg.bw")
+########################################## get Footprints #######################################################
+
+rule download_motifs:
+    input:
+    output:
+        os.path.join(scratch_dir, "downloads/Vierstra_hg38.archetype_motifs.v1.0.bed.gz"),
+        os.path.join(scratch_dir, "downloads/Vierstra_hg38.archetype_motifs.v1.0.bed.gz.tbi"),
+    resources:
+        partition="short",
+        runtime="0-10:00",
+        cpus_per_task=1,
+        mem_mb=5000
+    run:
+        shell("wget -P /home/djl34/scratch/downloads/ https://resources.altius.org/~jvierstra/projects/motif-clustering/releases/v1.0/hg38.archetype_motifs.v1.0.bed.gz")
+        shell("wget -P /home/djl34/scratch/downloads/ https://resources.altius.org/~jvierstra/projects/motif-clustering/releases/v1.0/hg38.archetype_motifs.v1.0.bed.gz.tbi")
+
+########################################## from mut model to tsv file#######################################################
+rule download_vova_model:
+    input:
+#         os.path.join(pd_data_dir, "vova_model/{chrom}_rate_v5.2_TFBS_correction.gz")
+    output:
+        os.path.join(scratch_dir, "downloads/{chrom}_rate_v5.2_TFBS_correction_all.vcf.bgz"),
+        os.path.join(scratch_dir, "downloads/{chrom}_rate_v5.2_TFBS_correction_all.vcf.bgz.csi"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=25000
+    run:
+        output_filename_0 = output[0].split("/")[-1]
+        output_filename_1 = output[1].split("/")[-1]
         
+        shell("wget -P /home/djl34/scratch/downloads/ http://genetics.bwh.harvard.edu/downloads/Vova/Roulette/{output_filename_0}")
+        shell("wget -P /home/djl34/scratch/downloads/ http://genetics.bwh.harvard.edu/downloads/Vova/Roulette/{output_filename_1}")
+        
+rule decompress_vova_model:
+    input:
+        os.path.join(scratch_dir, "downloads/{chrom}_rate_v5.2_TFBS_correction_all.vcf.bgz"),
+#         os.path.join(scratch_dir, "{chrom}_rate_v5.2_TFBS_correction_all.vcf.bgz.csi"),
+    output:
+        os.path.join(scratch_dir, "downloads/{chrom}_rate_v5.2_TFBS_correction_all.vcf"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=4,
+        mem_mb=16000
+    shell:
+        "bcftools view -I {input} -O v -o {output}"
+        
+        
+rule vcf_to_parquet:
+    input:
+        os.path.join(scratch_dir, "downloads/{chrom}_rate_v5.2_TFBS_correction_all.vcf"),
+    output:
+        os.path.join(scratch_dir, "downloads/mut_model/{chrom}/_metadata"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=4,
+        mem_mb=20000
+    run:
+        with Client() as client:
+            names = ["#CHROM", "POS", "ID","REF", "ALT", "QUAL", "FILTER", "INFO"]
+            ddf = dd.read_csv(input[0], sep = "\t", comment = "#", header = None , names=names)
+            ddf = ddf.repartition(partition_size="3GB")
+            ddf.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
 
-# http://genetics.bwh.harvard.edu/downloads/Vova/Roulette/        
-
-########################################## get gnomAD #######################################################
+###################################################### get gnomAD #######################################################
 rule download_gnomad_v3:
     input:
     output:
@@ -115,22 +200,72 @@ rule gnomad_v3_cov_split_by_chrom:
             
             df = df[df["Chrom"] == "chr" + wildcards.chrom]
             
-            df.to_csv(output[0], index = False, sep = "\t", single_file = True)       
-
-########################################## get zoonomia #######################################################
+            df.to_csv(output[0], index = False, sep = "\t", single_file = True)
+            
+            
+rule download_gnomad_v4:
+    input:
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=1,
+        mem_mb=500
+    output:
+        os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.sites.chr{chrom}.vcf.bgz")
+    shell:
+        "wget -P /n/scratch3/users/d/djl34/downloads/ https://storage.googleapis.com/gcp-public-data--gnomad/release/4.0/vcf/exomes/gnomad.exomes.v4.0.sites.chr{wildcards.chrom}.vcf.bgz"
+                
+rule download_gnomad_v4_tbi:
+    input:
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=1,
+        mem_mb=500
+    output:
+        os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.sites.chr{chrom}.vcf.bgz.tbi")
+    shell:
+        "wget -P /n/scratch3/users/d/djl34/downloads/ https://storage.googleapis.com/gcp-public-data--gnomad/release/4.0/vcf/exomes/gnomad.exomes.v4.0.sites.chr{wildcards.chrom}.vcf.bgz.tbi"
         
-rule download_zoonomia_phylop:
+rule download_gnomad_v4_cov:
     input:
     output:
-        os.path.join(scratch_dir, "zoonomia/cactus241way.phyloP.bw")
+        os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.coverage.summary.tsv.bgz")
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=1,
+        mem_mb=500
     shell:
-        "wget -P /n/scratch3/users/d/djl34/zoonomia/ https://hgdownload.soe.ucsc.edu/goldenPath/hg38/cactus241way/cactus241way.phyloP.bw"
+        "wget -P /n/scratch3/users/d/djl34/downloads/ https://storage.googleapis.com/gcp-public-data--gnomad/release/4.0/coverage/exomes/gnomad.exomes.v4.0.coverage.summary.tsv.bgz"
+        
+# rule gnomAD_v3_to_tsv:
+#     input:
+#         os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.sites.chr{chrom}.vcf.bgz")
+#     output:
+#         os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.sites.chr{chrom}.tsv")
+#     shell:        
+#         "bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\t%FILTER\t%AC\t%AN\t%AF\n' {input} > {output}"
+
+################################################## get zoonomia #######################################################
+        
+# rule download_zoonomia_phylop:
+#     input:
+#     output:
+#         os.path.join(scratch_dir, "zoonomia/cactus241way.phyloP.bw")
+#     shell:
+#         "wget -P /n/scratch3/users/d/djl34/zoonomia/ https://hgdownload.soe.ucsc.edu/goldenPath/hg38/cactus241way/cactus241way.phyloP.bw"
         
 rule bigwig_to_wig:
     input:
-        os.path.join(scratch_dir, "zoonomia/cactus241way.phyloP.bw")
+        os.path.join(KL_data_dir, "zoonomia/cactus241way.phyloP.bw")
     output:
         os.path.join(scratch_dir, "zoonomia/cactus241way.phyloP.wig")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=4,
+        mem_mb=20000
     shell:
         "bigWigToWig {input} {output}"
         
@@ -174,4 +309,267 @@ rule download_chromhmm:
         os.path.join(scratch_dir, "downloads/epimap/personal.broadinstitute.org/cboix/epimap/ChromHMM/observed_aux_18_hg38/CALLS/BSS00001_18_CALLS_segments.bed.gz")
     shell:
         "wget -P /n/scratch3/users/d/djl34/downloads/epimap/ --recursive --no-parent https://personal.broadinstitute.org/cboix/epimap/ChromHMM/observed_aux_18_hg38/CALLS/"
+        
+        
+rule move_chromhmm:
+    input:
+        os.path.join(scratch_dir, "downloads/epimap/personal.broadinstitute.org/cboix/epimap/ChromHMM/observed_aux_18_hg38/CALLS/{header}.bed.gz")
+    output:
+        os.path.join(pd_data_dir, "epimap/ChromHMM/{header}.tsv")
+    run:
+        df = pd.read_csv(input[0], sep = "\t")
+        
+        
+########################################## run spliceAI #######################################################
+
+rule filter_for_spliceai:
+    input:
+        parquet = [os.path.join(scratch_dir, "downloads/mut_model/" + chrom + "/_metadata") for chrom in chrom_set],
+        vcf = [os.path.join(scratch_dir, "downloads/"+ chrom + "_rate_v5.2_TFBS_correction_all.vcf") for chrom in chrom_set],
+        annotation = pd_data_dir + "/spliceai/spliceai_grch38.txt"
+    output:
+        os.path.join(scratch_dir, "downloads/spliceai/{gene}_rate_v5.2_TFBS_correction_all_spliceai.vcf"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=3,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            df_annot = pd.read_csv(input.annotation, sep = "\t")
+            df_annot = df_annot[df_annot["#NAME"] == wildcards.gene]
             
+            chrom = df_annot["CHROM"].iloc[0]
+            
+#             def get_range(start, end):
+#                 return range(start, end + 1)
+
+#             df_annot["POS"] = df_annot.apply(lambda row: get_range(row["TX_START"],row["TX_END"]), axis=1)
+#             df_annot = df_annot.explode('POS')
+            
+#             names = ["#CHROM", "POS", "ID","REF", "ALT", "QUAL", "FILTER", "INFO"]
+            input_parquet_filename = os.path.join(scratch_dir, "downloads/mut_model/" + chrom + "/")
+            input_vcf_filename = os.path.join(scratch_dir, "downloads/" + chrom + "_rate_v5.2_TFBS_correction_all.vcf")
+
+            ddf = dd.read_parquet(input_parquet_filename)
+#             df_annot["POS"] = df_annot["POS"].astype(int)
+#             df["POS"] = df["POS"].astype(int)
+            
+#             ddf = df.merge(df_annot[["POS"]], on = "POS", how = "inner")
+
+            start = df_annot.iloc[0]["TX_START"]
+            end = df_annot.iloc[0]["TX_END"]
+        
+            print("filtering by positions")
+            ddf = ddf[(ddf["POS"] >= start) & (ddf["POS"] <= end)]
+            df = ddf.compute()
+            
+            #write header of vcf file
+            with open(input_vcf_filename) as f:
+                fp = open(output[0], "wt")
+                reader = csv.reader(f, delimiter='\t')
+
+                comment = True
+
+                while comment == True:
+                    row1 = next(reader)  # gets the first line
+                    print(row1)
+
+                    if row1[0][0:2] == "##":
+                        fp.write(row1[0] + "\n")
+                    else:
+                        comment = False
+
+                fp.close()
+                                        
+            df.to_csv(output[0], index = False, sep = "\t", mode = "a")
+            
+#change ##FILTER=<ID=PASS,Description="All filters passed">
+#to ##FILTER=<ID=high,Description="All filters passed">
+
+rule create_header:
+    input:
+    output:
+        os.path.join(scratch_dir, "downloads/spliceai/header_fix"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=1,
+        mem_mb=3000
+    shell:    
+        'echo "##FILTER=<ID=high,Description="All filters passed, high quality">" > {output}'
+
+
+rule add_high_filter:
+    input:
+        header = os.path.join(pd_data_dir, "new_header"),
+        vcf = os.path.join(scratch_dir, "downloads/spliceai/{gene}_rate_v5.2_TFBS_correction_all_spliceai.vcf"),
+    output:
+        os.path.join(scratch_dir, "downloads/spliceai/{gene}_rate_v5.2_TFBS_correction_all_spliceai_headerfixed.vcf"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=1,
+        mem_mb=3000
+    shell:
+        'bcftools reheader -h {input.header} {input.vcf} > {output}'
+
+rule run_spliceai:
+    input:
+        vcf = os.path.join(scratch_dir, "downloads/spliceai/{gene}_rate_v5.2_TFBS_correction_all_spliceai_headerfixed.vcf"),
+        fa = os.path.join(pd_data_dir, "GCA_000001405.15_GRCh38_no_alt_analysis_set.fna")
+        #this fasta file is from http://lh3.github.io/2017/11/13/which-human-reference-genome-to-use
+    output:
+        os.path.join(scratch_dir, "downloads/spliceai/results/{gene}_rate_v5.2_TFBS_correction_all.vcf"),
+    conda:
+        "../../envs/spliceai.yml"
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=20,
+        mem_mb=80000
+    shell:
+        "spliceai -I {input.vcf} -O {output} -R {input.fa} -A grch38"
+        
+rule download_spliceai_raw:
+    input:
+    output:
+        os.path.join(scratch_dir, "downloads/spliceai_scores.raw.snv.hg38.vcf.gz"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=10000
+    shell:    
+        'curl https://basespace-data-east.s3.us-east-1.amazonaws.com/170dc484120a49f0b897aae301891840/spliceai_scores.raw.snv.hg38.vcf.gz\?AWSAccessKeyId\=AKIARPYQJSWQ6AGAAPOI\&Expires\=1693507259\&response-content-disposition\=attachment%3Bfilename%3Dspliceai_scores.raw.snv.hg38.vcf.gz\&response-content-type\=application%2Fx-gzip\&Signature\=kQjUScZwkArTOEA60tVISjWZaBE%3D -o {output}'
+        
+rule download_spliceai_raw_tbi:
+    input:
+    output:
+        os.path.join(scratch_dir, "downloads/spliceai_scores.raw.snv.hg38.vcf.gz.tbi"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=10000
+    shell:
+        'curl https://basespace-data-east.s3.us-east-1.amazonaws.com/170dc484120a49f0b897aae301891840/spliceai_scores.raw.snv.hg38.vcf.gz.tbi\?AWSAccessKeyId=AKIARPYQJSWQ6AGAAPOI&Expires=1693598514&response-content-disposition=attachment%3Bfilename%3Dspliceai_scores.raw.snv.hg38.vcf.gz.tbi&response-content-type=application%2Foctet-stream&Signature=aoWGoXbbl898sAmL%2F0prn7SZf%2FA%3DD -o {output}'
+        
+rule copy_spliceai_raw:
+    input:
+        vcf = os.path.join(scratch_dir, "downloads/spliceai_scores.raw.snv.hg38.vcf.gz"),
+        tbi = os.path.join(scratch_dir, "downloads/spliceai_scores.raw.snv.hg38.vcf.gz.tbi"),
+    output:
+        vcf = os.path.join(pd_data_dir, "spliceai/spliceai_scores.raw.snv.hg38.vcf.gz"),
+        tbi = os.path.join(pd_data_dir, "spliceai/spliceai_scores.raw.snv.hg38.vcf.gz.tbi"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=10000
+    run:
+        shell('cp {input.vcf} /home/djl34/lab_pd/data/')
+        shell('cp {input.tbi} /home/djl34/lab_pd/data/')
+
+rule unzip_spliceai_raw:
+    input:
+        vcf = os.path.join(scratch_dir, "downloads/spliceai_scores.raw.snv.hg38.vcf.gz"),
+        tbi = os.path.join(scratch_dir, "downloads/spliceai_scores.raw.snv.hg38.vcf.gz.tbi"),
+    output:
+        os.path.join(scratch_dir, "downloads/spliceai/spliceai_scores.raw.snv.hg38.vcf")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=4,
+        mem_mb=16000
+    shell:
+        "bcftools view -I {input.vcf} -O v -o {output}"
+
+rule spliceai_raw_split_by_chr:
+    input:
+        vcf = os.path.join(scratch_dir, "downloads/spliceai/spliceai_scores.raw.snv.hg38.vcf.gz"),
+    output:
+        os.path.join(scratch_dir, "downloads/spliceai/spliceai_scores.raw.snv.chrom_{chrom}.hg38.vcf")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=4,
+        mem_mb=16000
+    shell:
+        "bcftools view -I {input.vcf} -r {wildcards.chrom} -O v -o {output}"
+        
+rule split_info_column:
+    input:
+        vcf = os.path.join(scratch_dir, "downloads/spliceai/spliceai_scores.raw.snv.chrom_{chrom}.hg38.vcf"),
+        rate = os.path.join(scratch_dir, "whole_genome/footprints/{chrom}/_metadata"),
+    output:
+        os.path.join(KL_data_dir, "spliceai/spliceai_delta_scores.raw.snv.chrom_{chrom}/_metadata")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+#         "bcftools +split-vep {input} -f '%CHROM %POS %REF %ALT %CSQ\n' -d -A tab -o {output}"
+        with Client() as client:
+            names = ["CHROM", "POS", "ID","REF", "ALT", "QUAL", "FILTER", "INFO"]
+            ddf = dd.read_csv(input.vcf, sep = "\t", comment = "#", names = names, dtype={'CHROM': 'object'})
+            
+            ddf = ddf[ddf["REF"].isna() == False]
+            
+            columns = ["ALLELE", "SYMBOL", "DS_AG", "DS_AL", "DS_DG", "DS_DL", "DP_AG", "DP_AL", "DP_DG", "DP_DL"]
+
+            ddf[columns] = ddf["INFO"].str.split("|", expand = True, n = 9)
+            
+            ddf = ddf.drop(["ALLELE", "INFO"], axis = 1)
+            
+            ddf["DS_AG"] = ddf["DS_AG"].astype(float)
+            ddf["DS_AL"] = ddf["DS_AL"].astype(float)
+            ddf["DS_DG"] = ddf["DS_DG"].astype(float)
+            ddf["DS_DL"] = ddf["DS_DL"].astype(float)
+            
+            ddf["DS"] = ddf[["DS_AG", "DS_AL", "DS_DG", "DS_DL"]].max(axis=1)
+            
+            ddf = ddf.rename(columns = {"POS": "Pos", "ALT": "Allele", "SYMBOL": "spliceai_gene"})
+            
+            ddf = ddf[["Pos", "Allele", "spliceai_gene", "DS", "DS_AG", "DS_AL", "DS_DG", "DS_DL"]]
+            
+            rate = dd.read_parquet("/".join(input.rate.split("/")[:-1]) + "/")
+            
+            position_list = list(rate["Pos"].unique().compute())
+#             minimum_position = rate["Pos"].min().compute()
+#             max_position = rate["Pos"].max().compute()
+            
+            ddf = ddf[ddf["Pos"].isin(position_list)]
+            ddf = dataframe.fillna(0)
+
+            ddf = ddf.repartition(partition_size="1GB")
+            
+#             ddf.to_csv(output[0], sep = "\t", index = None)
+            
+            ddf.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+            
+# rule add_delta_score:
+#     input:
+#         os.path.join(scratch_dir, "downloads/spliceai/spliceai_scores.raw.snv.chrom_{chrom}.hg38.tsv")
+#     output:
+#         os.path.join(KL_data_dir, "spliceai/spliceai_delta_scores.raw.snv.chrom_{chrom}/metadata")
+#     resources:
+#         partition="short",
+#         runtime="0-12:00",
+#         cpus_per_task=5,
+#         mem_mb=get_mem_mb
+#     run:
+#         with Client() as client:
+#             ddf = dd.read_csv(input[0], sep = "\t", dtype={'CHROM': 'object','DP_AG': 'float64','DP_AL': 'float64',
+#                                                            'DP_DG': 'float64','DP_DL': 'float64'})
+
+#             ddf["DS"] = ddf[["DS_AG", "DS_AL", "DS_DG", "DS_DL"]].max(axis=1)
+            
+#             ddf.to_csv(output[0], index = False, sep = "\t", single_file = True) 
+            
+#             ddf = ddf.repartition(partition_size="1GB")
+            
+#             ddf.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+
+
