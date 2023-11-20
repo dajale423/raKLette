@@ -14,6 +14,12 @@ sys.path.append(script_folder_path)
 
 import ml_raklette as mlr
 
+# Define a smple mutation rate distribution for use in simulations
+simple_mu_pmf = np.array([1e5,1e6,2e6,
+                          1e6,1e5,1e3,
+                          2e3,5e4,2e3])
+simple_mu_pmf = simple_mu_pmf / np.sum(simple_mu_pmf)
+
 # convert list of value to a list of indices where the value changes 
 # and what those values are
 def get_switch_points(x):
@@ -309,6 +315,15 @@ def read_sfs_data(sfs_loc, prefix):
     return sfs_set, mu_unique, s_unique
 
 def simple_mu_dist(nn):
+    """
+    Generates a random sample of mu values based on a pre-defined distribution.
+
+    Parameters:
+    nn (int): The number of mu values to generate.
+
+    Returns:
+    numpy.ndarray: A 1D array of size nn containing randomly generated mu values.
+    """
     mu_vals = np.array([1.e-09, 2.e-09, 5.e-09, 
                         1.e-08, 2.e-08, 5.e-08, 
                         1.e-07, 2.e-07,5.e-07])
@@ -318,10 +333,50 @@ def simple_mu_dist(nn):
     sim_mu_dist = sim_mu_dist / np.sum(sim_mu_dist)
     return np.random.choice(mu_vals, size=nn, p=sim_mu_dist)
 
-simple_mu_pmf = np.array([1e5,1e6,2e6,
-                          1e6,1e5,1e3,
-                          2e3,5e4,2e3])
-simple_mu_pmf = simple_mu_pmf / np.sum(simple_mu_pmf)
+def add_pseudocounts(allele_counts, mu_dist, neut_dist, alpha=1):
+    """
+    Add pseudocounts to the allele counts to avoid zeros in the SFS.
+
+    Parameters
+    ----------
+    allele_counts : array_like (n_m x n_k)
+        The allele counts.
+    mu_dist : array_like (n_m)
+        The mutation rate distribution.
+    neut_dist : array_like (n_m x n_k)
+        The neutral SFS.
+    alpha : float
+        The pseudocount parameter.
+
+    Returns
+    -------
+    allele_counts : array_like (n_m x n_k)
+        The allele counts with pseudocounts added.
+    """
+    # verify that the mutation rate distribution is a probability distribution
+    assert np.abs(np.sum(mu_dist) - 1) < 1e-8
+    # verify that each row of the neutral SFS is a probability distribution
+    assert np.all(np.abs(np.sum(neut_dist, axis=1) - 1) < 1e-8)
+    # verify that the observed SFS has the same number of mutation rates as the allele counts
+    assert len(mu_dist) == allele_counts.shape[0]
+    # verify that the neutral SFS has the same number of allele count classes as the allele counts
+    assert allele_counts.shape[1] == neut_dist.shape[1]
+    # verify that the neutral SFS has the same number of mutation rates as the allele counts
+    assert len(mu_dist) == neut_dist.shape[0]
+
+    NN = np.sum(allele_counts)
+    kk = allele_counts.shape[1]
+    MM = neut_dist * mu_dist[:,None]
+    # verify that MM is a probability distribution
+    assert np.abs(np.sum(MM) - 1) < 1e-8
+
+    theta = (allele_counts + MM*alpha*kk) / (NN + alpha*kk)
+    # verify that theta is a probability distribution
+    assert np.abs(np.sum(theta) - 1) < 1e-8
+
+    # return the allele counts with pseudocounts added
+    return NN * theta
+
 
 class simPile:
     """
@@ -422,6 +477,24 @@ class simPile:
         shet_counts = np.bincount(shet_inds, minlength=len(self.shet_set))
         sample_shet_dist = shet_counts/np.sum(shet_counts)
         return self.calc_KL_pmf(sample_shet_dist, ref_mu)
+    
+    def get_neutral_sfs(self):
+        """
+        Get the neutral SFS.
+        """
+        if not self.has_neutral:
+            raise ValueError("No neutral simulation in the set.")
+        return self.sfs_set[:,self.neutral_index,:]
+    
+    def get_neutral_sfs_binned(self):
+        """
+        Get the neutral SFS.
+        """
+        if not self.has_neutral:
+            raise ValueError("No neutral simulation in the set.")
+        if self.binned_sfs is None:
+            raise ValueError("SFS has not been binned.")
+        return self.binned_sfs[:,self.neutral_index,:]
 
     def downsample(self, sample_size=2*70000, tv_sd=0.05, row_eps=1e-8):
         """
@@ -495,9 +568,12 @@ class simPile:
                 for ii in range(len(mu_ind_batches)):
                     nonzero_samples = ~np.random.binomial(1, self.sfs_cumsum[mu_ind_batches[ii], 
                                                                              s_ind_batches[ii], 0]).astype(bool)
-                    sfs_cumsum = (self.sfs_cumsum[mu_ind_batches[ii][nonzero_samples], s_ind_batches[ii][nonzero_samples], 1:] - 
-                                  self.sfs_cumsum[mu_ind_batches[ii][nonzero_samples], s_ind_batches[ii][nonzero_samples], 0][:, None]) / \
-                                    (1-self.sfs_cumsum[mu_ind_batches[ii][nonzero_samples], s_ind_batches[ii][nonzero_samples], 0][:, None])
+                    sfs_cumsum = (self.sfs_cumsum[mu_ind_batches[ii][nonzero_samples], 
+                                                  s_ind_batches[ii][nonzero_samples], 1:] - 
+                                  self.sfs_cumsum[mu_ind_batches[ii][nonzero_samples], 
+                                                  s_ind_batches[ii][nonzero_samples], 0][:, None]) / \
+                                    (1-self.sfs_cumsum[mu_ind_batches[ii][nonzero_samples], 
+                                                       s_ind_batches[ii][nonzero_samples], 0][:, None])
                     nn = np.sum(nonzero_samples)
                     result_add = np.zeros(len(mu_ind_batches[ii]))
                     result_add[nonzero_samples] = np.sum(sfs_cumsum < np.random.rand(nn, 1), axis=1) + 1
@@ -1056,7 +1132,7 @@ def reshape_counts(freq_bins, mu_grid, mu_vals, n_k):
         The mutation rates
         n_l array, where n_l is the number of simulated sites
     mu_vals : array_like
-        The mutation rates
+        The set of possible mutation rates
         n_m array, where n_m is the number of mutation rates
     n_k : int
         The number of allele frequency bins
@@ -1077,7 +1153,6 @@ def reshape_counts(freq_bins, mu_grid, mu_vals, n_k):
     result = np.sum(mask[..., np.newaxis] * (freq_bins[:, np.newaxis, np.newaxis] == np.arange(n_k)), 
                     axis=0)
 
-    # Convert the result to integer type if needed
     result = result.astype(int)
     return result
 
