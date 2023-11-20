@@ -27,6 +27,8 @@ all_chrom_set = [str(x) for x in range(1, 23)]
 chrom_set = all_chrom_set
 # chrom_set = ["21"]
 
+factor = 1.0
+
 print(chrom_set)
 
 wildcard_constraints:
@@ -36,24 +38,22 @@ def get_mem_mb(wildcards, attempt):
     return attempt * 30000
 
 def get_mem_mb_small(wildcards, attempt):
-    return attempt * 10000
+    return attempt * 6000 * factor
 
 rule all:
     input:
-        [os.path.join(pd_data_dir, "downloads/" + chrom +"_rate_v5.2_TFBS_correction_all.vcf.bgz") for chrom in chrom_set],
-        [os.path.join(scratch_dir, "whole_exome/" + chrom +"_rate_v5.2_TFBS_correction_whole_exon.vcf") for chrom in chrom_set],
-        [os.path.join(scratch_dir, "whole_exome/" + chrom +"_rate_v5.2_TFBS_correction_whole_exon.txt") for chrom in chrom_set],
-        [os.path.join(KL_data_dir, "whole_exome/vova_model/" + chrom +"_rate_v5.2_TFBS_correction_whole_exon.tsv") for chrom in chrom_set],
-        [os.path.join(KL_data_dir, "whole_exome/vep/" + chrom +"_rate_v5.2_TFBS_correction_whole_exon.tsv") for chrom in chrom_set],
-#         [os.path.join(scratch_dir, "whole_exome/" + chrom +"_rate_v5.2_TFBS_correction_whole_nonsense_loftee.vcf") for chrom in chrom_set],
-#         [os.path.join(KL_data_dir, "whole_exome/nonsense/" + chrom +"_loftee.tsv") for chrom in chrom_set],
-#         [os.path.join(scratch_dir, "whole_exome/new_rate_bin/" + chrom +"/_metadata") for chrom in chrom_set],
-#         [os.path.join(scratch_dir, "whole_exome/gnomad_cov/" + chrom +"/_metadata") for chrom in chrom_set],
-#         [os.path.join(KL_data_dir, "whole_exome/gnomad_filtered/" + chrom +"/_metadata") for chrom in chrom_set],
-#         [os.path.join(KL_data_dir, "whole_exome/freq_bins/" + chrom +"/_metadata") for chrom in chrom_set],
-#         os.path.join(KL_data_dir, "whole_exome/freq_bins/freq_bin_9_all.tsv"),
-#         [os.path.join(KL_data_dir, "whole_exome/nonsense/HC_" + chrom +"_loftee_added.tsv") for chrom in chrom_set],
-        
+        [os.path.join(scratch_dir, "whole_exome/new_rate_bin/" + chrom +"/_metadata") for chrom in chrom_set],
+        [os.path.join(scratch_dir, "whole_exome/gnomADv4/" + chrom +"/_metadata") for chrom in chrom_set],
+        [os.path.join(scratch_dir, "whole_exome/pos_sorted/" + chrom +"/_metadata") for chrom in chrom_set],
+        [os.path.join(KL_data_dir, "whole_exome/gnomad_filtered/" + chrom +"/_metadata") for chrom in chrom_set],
+        os.path.join(KL_data_dir, "whole_exome/freq_bins/freq_bin_9_all.tsv"),
+####################for gnomad
+#         [os.path.join(scratch_dir, "whole_exome/gnomad/gnomad.exomes.v4.0.sites.chr" + chrom +"_split.tsv") for chrom in chrom_set],
+####################for nonsense
+        [os.path.join(scratch_dir, "whole_exome/nonsense/" + chrom +"_rate_v5.2_TFBS_correction_whole_nonsense_loftee_38.vcf") for chrom in chrom_set],
+        [os.path.join(KL_data_dir, "whole_exome/nonsense/" + chrom +"_loftee_38.tsv") for chrom in chrom_set],
+        [os.path.join(KL_data_dir, "whole_exome/nonsense/HC_" + chrom +".tsv") for chrom in chrom_set],
+    
 ###################################################### mut model #######################################################
 rule download_vova_model:
     input:
@@ -162,17 +162,75 @@ rule run_split_vep:
         partition="short",
         runtime="0-1:00",
         cpus_per_task=1,
-        mem_mb=1000
+        mem_mb=800
     shell:
         """
-        bcftools +split-vep {input} -f '%CHROM\t%POS\t%REF\t%ALT\t%Consequence\t%Gene\t%Feature\n' -s primary > {output}
+        bcftools +split-vep {input} -f '%CHROM\t%POS\t%REF\t%ALT\t%Consequence\t%Gene\t%Feature\t%CANONICAL\n' -d > {output}
         """
         
 ## some mutation rate bins are very small, let's combine some and get the index
 
+rule get_mutation_rate:
+    input:
+        rate = os.path.join(KL_data_dir, "whole_exome/vova_model/{chrom}_rate_v5.2_TFBS_correction_whole_exon.tsv")
+    output:
+        os.path.join(scratch_dir, "whole_exome/mu_added/{chrom}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=1,
+        mem_mb=2000
+    run:
+        with Client() as client:
+            names_list = ['Chrom', 'Pos', 'Allele_ref', 'Allele', 'mu_quality', 'mu', 'mu_TFBS']
+
+            rate = dd.read_csv(input.rate, sep = "\t", names = names_list)
+            
+            rate["mu"] = rate["mu_TFBS"].where(rate["mu_TFBS"] != ".", rate["mu"])
+            
+            print(rate["mu_quality"].unique().compute())
+            
+            rate = rate.drop(['mu_TFBS'], axis=1)
+            
+            rate["mu"] = rate["mu"].astype(float)
+            
+#             rate = rate.set_index(['Pos', 'Allele_ref', 'Allele'])
+            
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+
+rule add_vep:
+    input:
+        rate = os.path.join(scratch_dir, "whole_exome/mu_added/{chrom}.tsv"),
+        vep = os.path.join(KL_data_dir, "whole_exome/vep/{chrom}_rate_v5.2_TFBS_correction_whole_exon.tsv"),
+    output:
+        os.path.join(scratch_dir, "whole_exome/vep_added/{chrom}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            rate = dd.read_csv(input.rate, sep = "\t")
+            
+            names_list = ['Chrom', 'Pos', 'Allele_ref', 'Allele', 'Consequence', 'Gene', 'Transcript', 'Canonical']
+
+            vep = dd.read_csv(input.vep, sep = "\t", names = names_list)
+            
+            vep = vep[vep["Canonical"] == "YES"]
+#             vep = vep.set_index(['Pos', 'Allele_ref', 'Allele'])
+            
+            #filter for high quality mutation rates
+            rate = rate[rate["mu_quality"].isin(["TFBS", "high"])]
+            
+            rate = rate.merge(vep[["Pos", "Allele_ref", "Allele", "Consequence", "Gene", "Transcript", "Canonical"]], on = ["Pos", "Allele_ref", "Allele"], how = "left")
+            
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+        
 rule bin_mutation_rate:
     input:
-        rate = os.path.join(KL_data_dir, "whole_exome/vova_model/{chrom}_rate_v5.2_TFBS_correction_whole_exon.tsv"),
+        rate = os.path.join(scratch_dir, "whole_exome/vep_added/{chrom}.tsv"),
         index = os.path.join(KL_data_dir, "whole_genome/mu_index.tsv")
     output:
         os.path.join(scratch_dir, "whole_exome/new_rate_bin/{chrom}/_metadata"),
@@ -183,18 +241,10 @@ rule bin_mutation_rate:
         mem_mb=get_mem_mb
     run:
         with Client() as client:
-            names_list = ['Chrom', 'Pos', 'Allele_ref', 'Allele', 'mu_quality', 'mu', 'mu_TFBS',
-                          'Consequence', 'Gene', 'Transcript']
-
-            rate = dd.read_csv(input.rate, sep = "\t", names = names_list)
             
-            #filter for high quality mutation rates
-            rate = rate[rate["mu_quality"].isin(["TFBS", "high"])]
+            rate = dd.read_csv(input.rate, sep = "\t")
             
-            rate["mu"] = rate["mu_TFBS"].where(rate["mu_TFBS"] != ".", rate["mu"])
-            
-            rate = rate.drop(['mu_quality', 'mu_TFBS'], axis=1)
-
+            names_list = ['Chrom', 'Pos', 'Allele_ref', 'Allele', 'Consequence', 'Gene', 'Transcript', 'Canonical']
             
             # first, bin some mutation rates
             def bin_mutation_rate(mu):
@@ -207,6 +257,8 @@ rule bin_mutation_rate:
                         return 0.128
                     if mu == 0.23:
                         return 0.236
+                    if mu == 0.35:
+                        return 0.357
                     return mu
                 else:
                     if mu < 0.6:
@@ -217,14 +269,13 @@ rule bin_mutation_rate:
                         return 1.0
                     elif mu < 1.6:
                         return 1.4
-                    elif mu > 3.5:
-                        return 3.55
+                    elif mu > 3.219:
+                        return 3.219
                     else:
                         return mu
             
 #             rate["mu"].replace(".", None)
             
-            rate["mu"] = rate["mu"].astype(float)
             rate["mu"] = rate.apply(lambda row: bin_mutation_rate(row["mu"]), axis=1)
             
             sfs = pd.read_csv(input.index, sep = "\t")
@@ -237,7 +288,14 @@ rule bin_mutation_rate:
                     return -1
             
             rate["mu_index"] = rate.apply(lambda row: get_index(row["mu"]), axis=1)
-            rate = rate.repartition(partition_size="3GB")
+            
+            
+            rate["index"] = rate["Pos"].astype(str) + "_" + rate["Allele_ref"] + "_" + rate["Allele"] + "_" + rate["Gene"]
+            rate["index"] = rate["index"].astype(object)
+            
+            rate = rate.dropna(subset=['index'])
+            
+            rate = rate.set_index("index")
             
             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
           
@@ -251,13 +309,52 @@ rule run_split_vep_gnomAD_v4:
         os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.sites.chr{chrom}.tsv")
     resources:
         partition="short",
-        runtime="0-12:00",
+        runtime="0-1:00",
         cpus_per_task=1,
-        mem_mb=2000
+        mem_mb=1000
     shell:
         """
         bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\t%FILTER\t%AC\t%AN\t%AF\n' {input}  > {output}
         """
+        
+# rule run_split_vep_gnomAD_v4_vep:
+#     input:
+#         os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.sites.chr{chrom}.vcf.bgz")
+#     output:
+#         os.path.join(scratch_dir, "whole_exome/gnomad/gnomad.exomes.v4.0.sites.chr{chrom}_vep.tsv")
+#     resources:
+#         partition="short",
+#         runtime="0-1:00",
+#         cpus_per_task=1,
+#         mem_mb=1000
+#     shell:
+#         """
+#         bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\t%vep\n' {input}  > {output}
+#         """
+        
+# rule split_by_variants:
+#     input:
+#         os.path.join(scratch_dir, "whole_exome/gnomad/gnomad.exomes.v4.0.sites.chr{chrom}_vep.tsv")
+#     output:
+#         os.path.join(scratch_dir, "whole_exome/gnomad/gnomad.exomes.v4.0.sites.chr{chrom}_split.tsv")
+#     resources:
+#         partition="short",
+#         runtime="0-1:00",
+#         cpus_per_task=5,
+#         mem_mb=15000
+#     run:
+#         from dask.distributed import Client
+
+#         with Client() as client:
+            
+#             names_list = ['Chrom', 'Pos', 'Allele_ref', 'Allele', 'vep']
+#             ddf = dd.read_csv(input.add, sep = "\t", names = names_list)
+            
+#             ddf = ddf.assign(var1=df['vep'].str.split(',')).explode('vep')
+            
+#             ddf.to_csv(output[0], sep = "\t", index = None)
+
+        
         
 rule merge_gnomAD_v4:
     input:
@@ -269,7 +366,7 @@ rule merge_gnomAD_v4:
         partition="short",
         runtime="0-1:00",
         cpus_per_task=5,
-        mem_mb=get_mem_mb
+        mem_mb=30000
     run:
         from dask.distributed import Client
 
@@ -278,7 +375,8 @@ rule merge_gnomAD_v4:
                         
             names_list = ['Chrom', 'Pos', 'Allele_ref', 'Allele', 'filter_gnomADv4', 'AC_gnomADv4', 'AN_gnomADv4', 'AF_gnomADv4']
             ddf = dd.read_csv(input.add, sep = "\t", names = names_list, dtype={'AF_gnomADv4': 'object'})
-            
+#             ddf = ddf.set_index(['Pos', 'Allele_ref', 'Allele'])
+
             ddf['AF_gnomADv4'] = ddf['AF_gnomADv4'].replace(".", 0)
             ddf['AF_gnomADv4'] = ddf['AF_gnomADv4'].fillna(0)
             ddf['AF_gnomADv4'] = ddf['AF_gnomADv4'].astype(float)
@@ -288,13 +386,12 @@ rule merge_gnomAD_v4:
             rate["Pos"] = dd.to_numeric(rate['Pos'], errors='coerce').fillna(0).astype(int)
             
             #get minor allele freq
-            
             rate['AF_gnomADv4'] = rate['AF_gnomADv4'].fillna(0)
             rate["AF"] = rate["AF_gnomADv4"]
             rate["1-AF"] = 1 - rate["AF"]
             rate["MAF"] = rate[["AF", "1-AF"]].min(axis=1)
             
-            rate = rate.drop(['AF', '1-AF'], axis=1)
+            rate = rate.drop(['AF', '1-AF', 'Canonical'], axis=1)
             
             rate = rate.repartition(partition_size="3GB")
             
@@ -371,27 +468,62 @@ rule add_gnomAD_coverage:
             
             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
             
-rule filter_after_adding_gnomAD:
+rule sort_by_pos:
     input:
         rate = os.path.join(scratch_dir, "whole_exome/gnomad_cov/{chrom}/_metadata"),
     output:
-        os.path.join(KL_data_dir, "whole_exome/gnomad_filtered/{chrom}/_metadata"),
+        os.path.join(scratch_dir, "whole_exome/pos_sorted/{chrom}/_metadata"),
     resources:
         partition="short",
-        runtime="0-0:20",
-        cpus_per_task=1,
-        mem_mb=4000
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
     run:
         with Client() as client:
             
             rate = dd.read_parquet("/".join(input.rate.split("/")[:-1]) + "/")
             
-            rate = rate[(rate["filter_gnomADv4"].str.contains("AS_VQSR") == False) & (rate["filter_gnomADv4"].str.contains("InbreedingCoeff") == False)]
+#             rate["index"] = rate["Pos"].astype(str) + "_" + rate["Allele_ref"] + "_" + rate["Allele"] + "_" + rate["Gene"]
+#             rate["index"] = rate["index"].astype(object)
             
-            rate = rate[rate["cov_mean_gnomADv4"] > 20]
+#             rate = rate.dropna(subset=['index'])
+            
+#             rate = rate.set_index("index")
+            
+            #forward and backfille for AN
+            rate["AN_gnomADv4_ffill"] = rate["AN_gnomADv4"].fillna(method = "ffill")
+            rate["AN_gnomADv4_bfill"] = rate["AN_gnomADv4"].fillna(method = "bfill")
+            rate['AN_gnomADv4_interpolate'] = rate[['AN_gnomADv4_bfill', 'AN_gnomADv4_ffill']].mean(axis=1)
+            
+            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+
+            
+rule filter_after_adding_gnomAD:
+    input:
+        rate = os.path.join(scratch_dir, "whole_exome/pos_sorted/{chrom}/_metadata"),
+    output:
+        os.path.join(KL_data_dir, "whole_exome/gnomad_filtered/{chrom}/_metadata"),
+    resources:
+        partition="short",
+        runtime="0-0:20",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            rate = dd.read_parquet("/".join(input.rate.split("/")[:-1]) + "/")
+            
+            rate = rate[(rate["filter_gnomADv4"].isna()) | ((rate["filter_gnomADv4"].str.contains("AS_VQSR") == False) & (rate["filter_gnomADv4"].str.contains("InbreedingCoeff") == False))]
+            
+            rate = rate[(rate["cov_mean_gnomADv4"] > 20) | (rate["cov_mean_gnomADv4"].isna())]
+            
             
             #some allele numbers are set as 0.0, so let's filter them out just in case
-            rate = rate[(rate["AN_gnomADv4"] > 100000) | (rate["AN_gnomADv4"].isna())]
+            rate = rate[(rate["AN_gnomADv4_interpolate"] > 500000)]
+            
+            
+            rate = rate.drop(['AN_gnomADv4_ffill', 'AN_gnomADv4_bfill'], axis=1)
+            
             
             rate = rate.repartition(partition_size="3GB")
             
@@ -428,7 +560,9 @@ rule filter_by_neutral_region:
             
 ####################################################### make AF bins #######################################################
 
-freq_breaks_9 = [-1, 1e-8, 1e-06, 1.5e-06, 3.0e-06, 1e-05, 5e-05, 5e-04, 5e-03, 0.5] 
+# freq_breaks_9 = [-1, 1e-8, 2e-06, 4.0e-06, 8.0e-06, 1.6e-05, 5e-05, 5e-04, 5e-03, 0.5] 
+# freq_breaks_10 = [-1, 1e-8, 1e-06, 1.5e-06, 3.0e-06, 1e-05, 5e-05, 5e-04, 5e-03, 5e-02, 0.5] 
+
 # freq_breaks_9 = [-1, 1e-8, 1e-05, 1.7e-05, 2.3e-05, 3.6e-05, 8e-05, 5e-04, 5e-03, 0.5] 
 
 
@@ -441,13 +575,17 @@ rule make_adaptive_bins:
         partition="short",
         runtime="0-1:00",
         cpus_per_task=1,
-        mem_mb=4000
+        mem_mb=5000
     run:
         with Client() as client:
+            
+            freq_breaks_9 = [-1, 1e-8, 2e-06, 4.0e-06, 8.0e-06, 1.6e-05, 5e-05, 5e-04, 5e-03, 0.5] 
+            freq_breaks_10 = [-1, 1e-8, 2e-06, 4.0e-06, 8.0e-06, 1.6e-05, 5e-05, 5e-04, 5e-03, 5e-02, 0.5] 
             
             rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
             
             rate["Freq_bin_9"] = rate['MAF'].map_partitions(pd.cut, freq_breaks_9, labels = False)
+            rate["Freq_bin_10"] = rate['MAF'].map_partitions(pd.cut, freq_breaks_10, labels = False)
             
             rate = rate.repartition(partition_size="3GB")
 
@@ -456,7 +594,7 @@ rule make_adaptive_bins:
             
 rule make_SFS_neutral:
     input:
-        os.path.join(scratch_dir, "whole_exome/fix_rate_bin/{chrom}/_metadata"),
+        os.path.join(KL_data_dir, "whole_exome/freq_bins/{chrom}/_metadata"),
     output:
 #         os.path.join(scratch_dir, "whole_exome/freq_bins/freq_bin_10_{chrom}.tsv"),
         os.path.join(scratch_dir, "whole_exome/freq_bins/freq_bin_9_{chrom}.tsv"),
@@ -524,138 +662,176 @@ rule combine_9_SFS_neutral:
             
             df_group.to_csv(output[0], sep = "\t", index = None)
         
-# rebin some mu together
-rule bin_mutation_rate_fix:
-    input:
-        rate = os.path.join(KL_data_dir, "whole_exome/freq_bins/{chrom}/_metadata"),
-        index = os.path.join(KL_data_dir, "whole_genome/mu_index.tsv")
-    output:
-        os.path.join(scratch_dir, "whole_exome/fix_rate_bin/{chrom}/_metadata"),
-    resources:
-        partition="short",
-        runtime="0-1:00",
-        cpus_per_task=5,
-        mem_mb=get_mem_mb
-    run:
-        with Client() as client:
-            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+# # rebin some mu together
+# rule bin_mutation_rate_fix:
+#     input:
+#         rate = os.path.join(KL_data_dir, "whole_exome/freq_bins/{chrom}/_metadata"),
+#         index = os.path.join(KL_data_dir, "whole_genome/mu_index.tsv")
+#     output:
+#         os.path.join(scratch_dir, "whole_exome/fix_rate_bin/{chrom}/_metadata"),
+#     resources:
+#         partition="short",
+#         runtime="0-1:00",
+#         cpus_per_task=5,
+#         mem_mb=get_mem_mb
+#     run:
+#         with Client() as client:
+#             rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
             
             
-            # first, bin some mutation rates
-            def bin_mutation_rate(mu):
-                if mu > 3.219:
-                    return 3.219
-                else:
-                    return mu
+#             # first, bin some mutation rates
+#             def bin_mutation_rate(mu):
+#                 if mu > 3.219:
+#                     return 3.219
+#                 else:
+#                     return mu
             
-#             rate["mu"].replace(".", None)
+# #             rate["mu"].replace(".", None)
             
-            rate["mu"] = rate["mu"].astype(float)
-            rate["mu"] = rate.apply(lambda row: bin_mutation_rate(row["mu"]), axis=1)
+#             rate["mu"] = rate["mu"].astype(float)
+#             rate["mu"] = rate.apply(lambda row: bin_mutation_rate(row["mu"]), axis=1)
                         
-            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+#             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
             
             
 ################################################ to run nonsense_loftee ################################################
-# rule make_nonsense_regions_file:
-#     input:
-#         os.path.join(KL_data_dir, "whole_exome/{chrom}_rate_v5.2_TFBS_correction_whole_exon.tsv")
-#     output:
-#         os.path.join(scratch_dir, "whole_exome/{chrom}_whole_exon_nonsense_regions_file.tsv")
-#     resources:
-#         partition="short",
-#         runtime="0-12:00",
-#         cpus_per_task=1,
-#         mem_mb=4000     
-#     run:
-#         with Client() as client:
-
-#             names_list = ['Chrom', 'Pos', 'Allele_ref', 'Allele', 'Filter', 'mu', 'Consequence', 'Gene', 'Transcript']
-
-#             ddf = dd.read_csv(input[0], sep = "\t", names = names_list)
-            
-#             df_nonsense = ddf[(ddf["Consequence"].str.contains("splice_acceptor_variant")) | (ddf["Consequence"].str.contains("splice_donor_variant")) | (ddf["Consequence"].str.contains("stop_gained"))].compute()
-            
-#             df_nonsense[["Chrom", "Pos"]].to_csv(output[0], sep = "\t", index = None, header = False)
-        
-rule filter_for_nonsense_sites:
+rule make_nonsense_regions_file:
     input:
-        vcf = os.path.join(pd_data_dir, "downloads/{chrom}_rate_v5.2_TFBS_correction_all.vcf.bgz"),
-        regions_file = os.path.join(scratch_dir, "whole_exome/{chrom}_whole_exon_nonsense_regions_file.tsv")
+        os.path.join(KL_data_dir, "whole_exome/vep/{chrom}_rate_v5.2_TFBS_correction_whole_exon.tsv")
     output:
-        os.path.join(scratch_dir, "whole_exome/{chrom}_rate_v5.2_TFBS_correction_whole_nonsense.vcf"),
+        os.path.join(scratch_dir, "whole_exome/nonsense/{chrom}_whole_exon_nonsense_regions_file.tsv")
     resources:
         partition="short",
         runtime="0-12:00",
         cpus_per_task=1,
-        mem_mb=3000
+        mem_mb=4000     
+    run:
+        with Client() as client:
+
+            names_list = ['Chrom', 'Pos', 'Allele_ref', 'Allele', 'Consequence', 'Gene', 'Transcript', 'Canonical']
+
+            ddf = dd.read_csv(input[0], sep = "\t", names = names_list)
+            
+            df_nonsense = ddf[(ddf["Consequence"].str.contains("splice_acceptor_variant")) | (ddf["Consequence"].str.contains("splice_donor_variant")) | (ddf["Consequence"].str.contains("stop_gained"))].compute()
+            
+            df_nonsense[["Chrom", "Pos"]].to_csv(output[0], sep = "\t", index = None, header = False)
+        
+rule filter_for_nonsense_sites:
+    input:
+        vcf = os.path.join(pd_data_dir, "downloads/{chrom}_rate_v5.2_TFBS_correction_all.vcf.bgz"),
+        regions_file = os.path.join(scratch_dir, "whole_exome/nonsense/{chrom}_whole_exon_nonsense_regions_file.tsv")
+    output:
+        os.path.join(scratch_dir, "whole_exome/nonsense/{chrom}_rate_v5.2_TFBS_correction_whole_nonsense.vcf"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=1,
+        mem_mb=2000
     shell:        
         "bcftools view -R {input.regions_file} -o {output} {input.vcf}"
         
 rule run_vep_loftee:
     input:
-        os.path.join(scratch_dir, "whole_exome/{chrom}_rate_v5.2_TFBS_correction_whole_nonsense.vcf"),
+        os.path.join(scratch_dir, "whole_exome/nonsense/{chrom}_rate_v5.2_TFBS_correction_whole_nonsense.vcf"),
     output:
-        os.path.join(scratch_dir, "whole_exome/{chrom}_rate_v5.2_TFBS_correction_whole_nonsense_loftee.vcf")
+        os.path.join(scratch_dir, "whole_exome/nonsense/{chrom}_rate_v5.2_TFBS_correction_whole_nonsense_loftee_38.vcf")
     resources:
         partition="short",
         runtime="0-12:00",
         cpus_per_task=8,
-        mem_mb=16000
+        mem_mb=12000
     shell:
         """
         module load gcc/6.2.0
         module load perl/5.30.0
         eval `perl -Mlocal::lib=~/perl5-O2`
-        {vep} --cache --offline -i {input} -o {output} --fork 8 --vcf --canonical --force_overwrite --no_stats --buffer_size 10000 --fasta /home/djl34/lab_pd/data/fasta/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna --plugin LoF,loftee_path:/home/djl34/lab_pd/git/loftee,human_ancestor_fa:/home/djl34/lab_pd/data/human_ancestor/human_ancestor.fa.gz --dir_plugins /home/djl34/lab_pd/git/loftee        
+        export PERL5LIB=$PERL5LIB:/home/djl34/lab_pd/data/for_loftee/:$HOME/cpanm/lib/perl5
+        {vep} --cache --offline -i {input} -o {output} --fork 8 --vcf --canonical --force_overwrite --no_stats --buffer_size 10000 --fasta /home/djl34/lab_pd/data/fasta/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna --plugin LoF,loftee_path:/home/djl34/lab_pd/git/loftee,human_ancestor_fa:/home/djl34/lab_pd/data/human_ancestor/hg38/human_ancestor.fa.gz,conservation_file:/home/djl34/lab_pd/data/for_loftee/loftee.sql,gerp_bigwig:/home/djl34/lab_pd/data/for_loftee/gerp_conservation_scores.homo_sapiens.GRCh38.bw --dir_plugins /home/djl34/lab_pd/git/loftee    
         """
+        
+# rule run_vep_loftee_38:
+#     input:
+#         os.path.join(scratch_dir, "whole_exome/nonsense/{chrom}_rate_v5.2_TFBS_correction_whole_nonsense.vcf"),
+#     output:
+#         os.path.join(scratch_dir, "whole_exome/nonsense/{chrom}_rate_v5.2_TFBS_correction_whole_nonsense_loftee_38.vcf")
+#     resources:
+#         partition="short",
+#         runtime="0-12:00",
+#         cpus_per_task=8,
+#         mem_mb=14000
+#     shell:
+#         """
+#         module load gcc/6.2.0
+#         module load perl/5.30.0
+#         export PERL5LIB=$PERL5LIB:/home/djl34/lab_pd/data/for_loftee/
+#         eval `perl -Mlocal::lib=~/perl5-O2`
+#         {vep} --cache --offline -i {input} -o {output} --fork 8 --vcf --canonical --force_overwrite --no_stats --buffer_size 10000 --fasta /home/djl34/lab_pd/data/fasta/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna --plugin LoF,loftee_path:/home/djl34/lab_pd/git/loftee,human_ancestor_fa:/home/djl34/lab_pd/data/human_ancestor/hg38/human_ancestor.fa.gz,conservation_file:/home/djl34/lab_pd/data/for_loftee/loftee.sql,gerp_bigwig:/home/djl34/lab_pd/data/for_loftee/gerp_conservation_scores.homo_sapiens.GRCh38.bw --dir_plugins /home/djl34/lab_pd/git/loftee_38        
+#         """
         
 rule run_split_vep_loftee:
     input:
-        os.path.join(scratch_dir, "whole_exome/{chrom}_rate_v5.2_TFBS_correction_whole_nonsense_loftee.vcf")
+        os.path.join(scratch_dir, "whole_exome/nonsense/{chrom}_rate_v5.2_TFBS_correction_whole_nonsense_loftee_38.vcf")
     output:
-        os.path.join(KL_data_dir, "whole_exome/nonsense/{chrom}_loftee.tsv")
+        os.path.join(KL_data_dir, "whole_exome/nonsense/{chrom}_loftee_38.tsv")
     resources:
         partition="short",
         runtime="0-01:00",
         cpus_per_task=1,
-        mem_mb=2000
+        mem_mb=1000
     shell:
         """
-        bcftools +split-vep {input} -f '%CHROM\t%POS\t%REF\t%ALT\t%Consequence\t%Gene\t%Feature\t%LoF\t%LoF_filter\t%LoF_flags\LoF_info\n' -s primary > {output}
+        bcftools +split-vep {input} -f '%CHROM\t%POS\t%REF\t%ALT\t%Consequence\t%Gene\t%Feature\t%CANONICAL\t%LoF\t%LoF_filter\t%LoF_flags\t%LoF_info\n' -d > {output}
         """
-        
-# rebin some mu together
-rule merge_loftee:
+
+rule filter_nonsense_from_freq_bins:
     input:
-        rate = os.path.join(scratch_dir, "whole_exome/fix_rate_bin/{chrom}/_metadata"),
-        nonsense = os.path.join(KL_data_dir, "whole_exome/nonsense/{chrom}_loftee.tsv")
+        os.path.join(KL_data_dir, "whole_exome/freq_bins/{chrom}/_metadata"),
     output:
-        os.path.join(KL_data_dir, "whole_exome/nonsense/HC_{chrom}_loftee_added.tsv"),
-        os.path.join(KL_data_dir, "whole_exome/nonsense/not_LC_{chrom}_loftee_added.tsv")
+        os.path.join(scratch_dir, "whole_exome/freq_bins/{chrom}_lof.tsv")
     resources:
         partition="short",
         runtime="0-1:00",
         cpus_per_task=1,
-        mem_mb=6000
+        mem_mb=5000
     run:
         with Client() as client:
-            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
-            rate = rate.compute()
             
-            names_list = ['Chrom', 'Pos', 'Allele_ref', 'Allele', 'Consequence', 'Gene', 'Transcript', 'LoF_filter', 'LoF_flags', 'LoF_info']
+            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+            
+            rate_nonsense = rate[(rate["Consequence"].str.contains("splice_acceptor_variant")) | (rate["Consequence"].str.contains("splice_donor_variant")) | (rate["Consequence"].str.contains("stop_gained"))].compute()
+            
+            rate_nonsense.to_csv(output[0], sep = "\t", index = None)      
+        
+# rebin some mu together
+rule merge_loftee:
+    input:
+        rate = os.path.join(scratch_dir, "whole_exome/freq_bins/{chrom}_lof.tsv"),
+        nonsense = os.path.join(KL_data_dir, "whole_exome/nonsense/{chrom}_loftee_38.tsv")
+    output:
+        os.path.join(KL_data_dir, "whole_exome/nonsense/HC_{chrom}.tsv"),
+#         os.path.join(KL_data_dir, "whole_exome/nonsense/not_LC_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb_small
+    run:
+        with Client() as client:
+            rate = pd.read_csv(input[0], sep = "\t")
+                        
+            names_list = ['Chrom', 'Pos', 'Allele_ref', 'Allele', 'Consequence', 'Gene', 'Transcript', 'Canonical', 'LoF', 'LoF_filter', 'LoF_flags', 'LoF_info']
+
             df = pd.read_csv(input.nonsense, sep = "\t", names = names_list)
             
-            df = df[["Pos", "Allele_ref", "Allele", "LoF_filter", "LoF_flags"]].merge(rate, on = ["Pos", "Allele", "Allele_ref"], how = "left")
+            df = df[df["Canonical"] == "YES"]
+            df = df[(df["Consequence"].str.contains("splice_acceptor_variant")) | (df["Consequence"].str.contains("splice_donor_variant")) | (df["Consequence"].str.contains("stop_gained"))]
+            df = df[df["LoF"] == "HC"]
             
-            df_hc = df[df["LoF_filter"] == "HC"]
+            df = df[["Pos", "Allele_ref", "Allele", "LoF", "LoF_filter", "LoF_flags", "LoF_info"]].merge(rate, on = ["Pos", "Allele", "Allele_ref"], how = "left")
+            
+            df = df[df["Chrom"].isna() == False]
 
-            df_hc.to_csv(output[0], sep = "\t", index = None)
-            
-            df_hc = df[df["LoF_filter"] != "LC"]
-            
-            df_hc.to_csv(output[1], sep = "\t", index = None)
-            
+            df.to_csv(output[0], sep = "\t", index = None)            
             
         
 # rule merge_loftee:
