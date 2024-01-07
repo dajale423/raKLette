@@ -1,0 +1,694 @@
+import os
+import sys
+import glob
+import numpy as np
+import pandas as pd
+import math
+import sys
+import random
+import pickle
+import csv
+
+import dask.dataframe as dd
+import dask.array as da
+from dask.distributed import Client
+
+sys.path.insert(0,'/home/djl34/lab_pd/bin')
+import genomic
+
+import random
+
+from collections import Counter
+
+import torch
+import pyro
+import pyro.distributions as dist
+import pyro.distributions.constraints as constraints
+from pyro.nn import PyroModule
+
+from tqdm import tqdm
+from torch.utils.data import Dataset, DataLoader
+
+sys.path.insert(0, '/home/djl34/lab_pd/kl/git/KL/scripts')
+import raklette
+from run_raklette import run_raklette
+from run_raklette import run_raklette_cov
+from run_raklette import TSVDataset
+from others import round_sig
+
+#include rules
+include: "/home/djl34/lab_pd/kl/git/KL/scripts/Snakefile"
+
+factor = 1.0
+
+def get_mem_mb(wildcards, attempt):
+    return attempt * 3000 * factor
+
+###################################################################################################################
+
+KL_data_dir = "/home/djl34/lab_pd/kl/data"
+pd_data_dir = "/home/djl34/lab_pd/data"
+scratch_dir = "/n/scratch3/users/d/djl34"
+
+base_set = ["A", "C", "T", "G"]
+all_chrom_set = [str(x) for x in range(1, 23)]
+even_chrom_set = [str(2 * x) for x in range(1, 12)]
+
+chrom_set = all_chrom_set
+
+
+wildcard_constraints:
+    chrom="\d+",
+    chrom_all="[-+]?\d+",
+    epoch="\d+",
+    interval_min="[+-]?([0-9]*[.])?[0-9]+",
+    interval_max="[+-]?([0-9]*[.])?[0-9]+",
+    samplesize="\d+",
+    count_num="\d+",
+
+file_directory = "lof/"
+
+###################################################################################################################
+
+filename_list = [os.path.join(KL_data_dir, "lof/loeuf/LOEUF_results_gnomADv4_chr_{chrom}.tsv"),
+                 os.path.join(KL_data_dir, "raklette_output/" + file_directory + "simple_KL_pseudocount_10_chr_{chrom}.tsv"),
+                 os.path.join(scratch_dir, "whole_exome/nonsense/HC_{chrom}_satterstrom.tsv"),
+                os.path.join(KL_data_dir, "whole_exome/nonsense/HC_{chrom}_satterstrom_bygene.tsv"),
+                os.path.join(scratch_dir, "whole_exome/nonsense/neutral_{chrom}_satterstrom.tsv"),
+                os.path.join(KL_data_dir, "whole_exome/nonsense/neutral_{chrom}_satterstrom_bygene.tsv")]
+
+input_list = [filename.replace("{chrom}", str(chromosome)) for filename in filename_list for chromosome in chrom_set]
+
+
+rule all:
+    input:
+        input_list,
+        os.path.join(KL_data_dir, "de_novo/ASD_de_novo_variants_hg38.tsv")
+
+########################################## working with denovo ##############################################
+
+# df["hg38_start"] = df.apply(lambda row: genomic.get_hg38_pos(row["Chrom"], row["start"]), axis=1)
+#             df["hg38_end"] = df.apply(lambda row: genomic.get_hg38_pos(row["Chrom"], row["end"]), axis=1)
+
+rule liftover_denovo_data:
+    input:
+        os.path.join(KL_data_dir, "de_novo/ASD_de_novo_variants.csv")
+    output:
+        os.path.join(KL_data_dir, "de_novo/ASD_de_novo_variants_hg38.tsv")
+    resources:
+        partition="short",
+        runtime="0-0:10",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            df = pd.read_csv(input[0])
+            
+            df["Chrom"] = df["Variant"].str.split(":", expand = True)[0]
+            df["Pos"] = df["Variant"].str.split(":", expand = True)[1].astype(int)
+            
+            df["Pos_hg38"] = df.apply(lambda row: genomic.get_hg38_pos(row["Chrom"], row["Pos"]), axis=1)
+            
+            df.to_csv(output[0], sep = "\t", index = None) 
+            
+rule add_denovo_to_synonymous:
+    input:
+        rate = os.path.join(KL_data_dir, "whole_exome/freq_bins/{chrom}/_metadata"),
+        lof = os.path.join(KL_data_dir, "de_novo/ASD_de_novo_variants_hg38.tsv")
+    output:
+        os.path.join(scratch_dir, "whole_exome/nonsense/neutral_{chrom}_satterstrom.tsv")
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=1,
+        mem_mb=10000
+    run:
+        rate = dd.read_parquet("/".join(input.rate.split("/")[:-1]) + "/")
+        
+        rate = rate[rate["neutral"] == 1]
+#         rate = rate.compute()
+
+        lof = pd.read_csv(input.lof, sep = "\t")
+        lof["Allele_ref"] = lof["Variant"].str.split(":", expand = True)[2]
+        lof["Allele"] = lof["Variant"].str.split(":", expand = True)[3]
+        
+        lof = lof[["Chrom", "Pos_hg38" , "Allele_ref", "Allele", "Affected_Status"]]
+        lof = lof.rename({"Pos_hg38": "Pos"}, axis = 1)
+        
+        
+        lof["denovo_affected"] = 1
+        lof["denovo_affected"] = lof["denovo_affected"].where((lof["Affected_Status"] == 2) , 0)
+        
+        lof["denovo_control"] = 1
+        lof["denovo_control"] = lof["denovo_control"].where((lof["Affected_Status"] == 1) , 0)
+        
+        lof = lof[lof["Chrom"] == wildcards.chrom]
+        
+        rate = rate.merge(lof[["Pos", "Allele", "denovo_affected", "denovo_control"]], on = ["Pos", "Allele"], how = "left")
+        
+        rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+        
+rule add_denovo_to_lof:
+    input:
+        rate = os.path.join(KL_data_dir, "whole_exome/nonsense/HC_{chrom}.tsv"),
+        lof = os.path.join(KL_data_dir, "de_novo/ASD_de_novo_variants_hg38.tsv")
+    output:
+        os.path.join(scratch_dir, "whole_exome/nonsense/HC_{chrom}_satterstrom.tsv")
+    resources:
+        partition="short",
+        runtime="0-0:10",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        rate = pd.read_csv(input.rate, sep = "\t")
+
+        lof = pd.read_csv(input.lof, sep = "\t")
+        
+        lof["Allele_ref"] = lof["Variant"].str.split(":", expand = True)[2]
+        lof["Allele"] = lof["Variant"].str.split(":", expand = True)[3]
+        
+        lof = lof[["Chrom", "Pos_hg38" , "Allele_ref", "Allele", "Affected_Status"]]
+        lof = lof.rename({"Pos_hg38": "Pos"}, axis = 1)
+        
+        
+        lof["denovo_affected"] = 1
+        lof["denovo_affected"] = lof["denovo_affected"].where((lof["Affected_Status"] == 2) , 0)
+        
+        lof["denovo_control"] = 1
+        lof["denovo_control"] = lof["denovo_control"].where((lof["Affected_Status"] == 1) , 0)
+        
+        lof = lof[lof["Chrom"] == wildcards.chrom]
+        
+        rate = rate.merge(lof[["Pos", "Allele", "denovo_affected", "denovo_control"]], on = ["Pos", "Allele"], how = "left")
+        
+        rate.to_csv(output[0], sep = "\t", index = None)
+        
+rule denovo_groupby_genes:
+    input:
+        rate = os.path.join(scratch_dir, "whole_exome/nonsense/HC_{chrom}_satterstrom.tsv")
+    output:
+        os.path.join(KL_data_dir, "whole_exome/nonsense/HC_{chrom}_satterstrom_bygene.tsv"),
+#         os.path.join(scratch_dir, "whole_exome/nonsense/HC_{chrom}_satterstrom_affected.tsv"),
+    resources:
+        partition="short",
+        runtime="0-0:10",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        rate = pd.read_csv(input.rate, sep = "\t")
+        
+        #for control, affected
+        rate_list = [2179, 6430]
+        
+        rate_bygene = rate[["Gene", "denovo_affected", "denovo_control", "mu"]].groupby("Gene").sum().reset_index()
+
+        per_generation_factor = 1.015 * 10 **-7
+
+        rate_bygene["rate_pergen"] = rate_bygene["mu"] * per_generation_factor
+        rate_bygene["rate_pergen_affected"] = rate_bygene["rate_pergen"] * rate_list[1]
+        rate_bygene["rate_pergen_control"] = rate_bygene["rate_pergen"] * rate_list[0]
+
+        rate_bygene.to_csv(output[0], sep = "\t", index = None)
+        
+rule denovo_groupby_genes_syn:
+    input:
+        rate = os.path.join(scratch_dir, "whole_exome/nonsense/neutral_{chrom}_satterstrom.tsv")
+    output:
+        os.path.join(KL_data_dir, "whole_exome/nonsense/neutral_{chrom}_satterstrom_bygene.tsv"),
+#         os.path.join(scratch_dir, "whole_exome/nonsense/HC_{chrom}_satterstrom_affected.tsv"),
+    resources:
+        partition="short",
+        runtime="0-0:10",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        rate = pd.read_csv(input.rate, sep = "\t")
+        
+        #for control, affected
+        rate_list = [2179, 6430]
+        
+        rate_bygene = rate[["Gene", "denovo_affected", "denovo_control", "mu"]].groupby("Gene").sum().reset_index()
+
+        per_generation_factor = 1.015 * 10 **-7
+
+        rate_bygene["rate_pergen"] = rate_bygene["mu"] * per_generation_factor
+        rate_bygene["rate_pergen_affected"] = rate_bygene["rate_pergen"] * rate_list[1]
+        rate_bygene["rate_pergen_control"] = rate_bygene["rate_pergen"] * rate_list[0]
+
+        rate_bygene.to_csv(output[0], sep = "\t", index = None)
+
+########################################## getting column of interest ##############################################
+
+
+# rule make_tsv_file:
+#     input:
+#         os.path.join(KL_data_dir, "whole_exome/nonsense/HC_{chrom}.tsv")
+#     output:
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_chr_{chrom}.tsv")
+#     resources:
+#         partition="short",
+#         runtime="0-12:00",
+#         cpus_per_task=5,
+#         mem_mb=get_mem_mb
+#     run:
+#         with Client() as client:
+
+#             rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+
+#             print(rate.columns)
+
+#             include_columns = ["mu_index", "Freq_bin_adaptive"]
+#             feature_list = ["Nonsense_Gene"]
+#             include_columns.extend(feature_list)
+
+#             for feature in feature_list:
+#                 rate = rate[rate[feature].isna() == False]
+                
+#             rate = rate[include_columns]
+            
+#             rate = rate.rename(columns={"Freq_bin_adaptive": "Freq_bin"})  
+            
+#             rate.to_csv(output[0], sep = "\t", index = None, single_file = True) 
+            
+# rule make_tsv_file_2bins:
+#     input:
+#         os.path.join(scratch_dir, "whole_genome/nonsense/2_bins/{chrom}/_metadata"),
+#     output:
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_2bins_chr_{chrom}.tsv")
+#     resources:
+#         partition="short",
+#         runtime="0-12:00",
+#         cpus_per_task=5,
+#         mem_mb=get_mem_mb
+#     run:
+#         with Client() as client:
+
+#             rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+
+#             print(rate.columns)
+
+#             include_columns = ["mu_index", "Freq_bin_2"]
+#             feature_list = ["Nonsense_Gene"]
+#             include_columns.extend(feature_list)
+
+#             for feature in feature_list:
+#                 rate = rate[rate[feature].isna() == False]
+                
+#             rate = rate[include_columns]
+            
+#             rate = rate.rename(columns={"Freq_bin_2": "Freq_bin"})  
+            
+#             rate.to_csv(output[0], sep = "\t", index = None, single_file = True) 
+            
+# rule make_tsv_file_for_loeuf:
+#     input:
+#         os.path.join(scratch_dir, "whole_genome/nonsense/{chrom}/_metadata"),
+#     output:
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_AC_chr_{chrom}.tsv")
+#     resources:
+#         partition="short",
+#         runtime="0-12:00",
+#         cpus_per_task=5,
+#         mem_mb=get_mem_mb
+#     run:
+#         with Client() as client:
+
+#             rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+
+#             print(rate.columns)
+
+#             include_columns = ["mu", "Freq_bin_adaptive", "AC_gnomADv3", "AN_gnomADv3"]
+#             feature_list = ["Nonsense_Gene", "Nonsense_Consequence"]
+#             include_columns.extend(feature_list)
+
+#             for feature in feature_list:
+#                 rate = rate[rate[feature].isna() == False]
+                
+#             rate = rate[include_columns]
+            
+#             rate = rate.rename(columns={"Freq_bin_adaptive": "Freq_bin"})
+            
+#             rate.to_csv(output[0], sep = "\t", index = None, single_file = True) 
+
+########################################## finding simple KL per gene ##############################################
+
+### get distribution per gene
+rule get_distribution:
+    input:
+        rate = os.path.join(KL_data_dir, "whole_exome/nonsense/HC_{chrom}.tsv"),
+        neutral_sfs = os.path.join(KL_data_dir, "whole_exome/freq_bins/freq_bin_9_all.tsv"),
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "obs_dist_chr_{chrom}.tsv"),
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "neutral_dist_chr_{chrom}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        rate = pd.read_csv(input.rate, sep = "\t")
+        neutral_sfs = pd.read_csv(input.neutral_sfs, sep = "\t")
+        neutral_sfs = neutral_sfs.drop(["mu", "sum"], axis = 1)
+        
+#         gene_list = list(rate["Nonsense_Gene"].unique())
+        
+#         def get_mu_list(rate, gene):
+#             return list(rate[rate["Nonsense_Gene"] == gene]["mu_index"])
+
+        ## first get observed distribution
+        df_gene = rate.groupby("Gene")["Freq_bin_9"].value_counts()
+
+        df_gene = pd.DataFrame(df_gene)
+
+        df_gene = df_gene.rename({"Freq_bin_9": "counts"}, axis = 1).reset_index()
+
+        df_gene = df_gene.pivot(index='Gene', columns='Freq_bin_9', values='counts')
+
+        df_gene = df_gene.reset_index()
+        df_gene.fillna(0, inplace = True)
+        
+        df_gene.to_csv(output[0], sep = "\t", index = None)
+        
+        ## get neutral distribution
+        def get_neutral_sfs(neutral_sfs, mu_index):
+            return pd.Series(neutral_sfs.iloc[mu_index])
+        
+        rate["mu_index"] = rate["mu_index"].astype(int)
+        
+        column_list = ["neutral_bin_" + str(i) for i in range(9)]
+        rate[column_list] = rate.apply(lambda row: get_neutral_sfs(neutral_sfs, row["mu_index"]), axis=1)
+        
+        df_gene = rate[["Gene"] + column_list].groupby("Gene").mean().reset_index()
+        
+        df_gene.to_csv(output[1], sep = "\t", index = None)
+        
+rule calculate_simple_KL_pergene:
+    input:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "obs_dist_chr_{chrom}.tsv"),
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "neutral_dist_chr_{chrom}.tsv"),
+    output:
+        os.path.join(KL_data_dir, "raklette_output/" + file_directory + "simple_KL_pseudocount_{pseudocounts}_chr_{chrom}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        from scipy.stats import entropy
+
+        k = int(wildcards.pseudocounts)
+
+        df_neutral = pd.read_csv(input[1], sep = "\t")
+        df_obs = pd.read_csv(input[0], sep = "\t")
+        
+        try:
+            df_obs["9.0"]
+        except:
+            df_obs["9.0"] = 0
+            
+        try:
+            df_obs["8.0"]
+        except:
+            df_obs["8.0"] = 0
+        
+        df_obs["sum"] = df_obs[[str(float(i)) for i in range(10)]].sum(axis = 1)
+
+        df = df_obs.merge(df_neutral, on = "Gene", how = "inner")
+
+        # k is pseudocount
+
+        for i in range(9):
+            obs_column_name = str(float(i))
+            column_name = "pseudocount_bin_" + str(i)
+            neutral_column_name = "neutral_bin_" + str(i)
+
+            df[column_name] = (df[obs_column_name] + k * df[neutral_column_name])/(df["sum"] + k)
+
+        neutral_columns = []
+        pseudo_columns = []
+
+        for i in range(9):
+            pseudo_column_name = "pseudocount_bin_" + str(i)
+            neu_column_name = "neutral_bin_" + str(i)
+
+            neutral_columns.append(neu_column_name)
+            pseudo_columns.append(pseudo_column_name)
+
+        df["neutral_dist"] = df[neutral_columns].values.tolist()
+        df["pseudo_dist"] = df[pseudo_columns].values.tolist()
+        
+        def get_kl(neutral_dist, pseudo_dist, reverse):
+            if neutral_dist[0] > pseudo_dist[0]:
+                if reverse:
+                    return -1 * entropy(pseudo_dist, neutral_dist)
+                else:
+                    return -1 * entropy(neutral_dist, pseudo_dist)
+            else:
+                if reverse:
+                    return entropy(pseudo_dist, neutral_dist)
+                else:
+                    return entropy(neutral_dist, pseudo_dist)
+
+
+        df["KL_rv"] = df.apply(lambda row: get_kl(row["neutral_dist"],row["pseudo_dist"], reverse = True), axis=1)        
+        df["KL_fw"] = df.apply(lambda row: get_kl(row["neutral_dist"],row["pseudo_dist"], reverse = False), axis=1)
+        
+        df.to_csv(output[0], sep = "\t", index = None)
+    
+########################################## finding KL per gene ##############################################
+
+rule chunk_by_genes:
+    input:
+        rate = os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_2bins_chr_{chrom}.tsv")
+    output:
+        rate = os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_2bins_chr_{chrom}_bygene/done")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        rate = pd.read_csv(input.rate, sep = "\t")
+        
+        
+        gb = rate.groupby('Nonsense_Gene') 
+        
+        for x in gb.groups:
+            df = gb.get_group(x)
+            
+            df["Nonsense_Gene"] = 1
+            
+            df.to_csv("/".join(output.rate.split("/")[:-1]) + "/" + x + ".tsv", sep = "\t", index = None)
+        
+        f = open(output.rate, "w")
+        f.write("done splitting by genes")
+        f.close()
+        
+rule pseudo_counts:
+    input:
+        rate = os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_chr_{chrom}.tsv"),
+        neutral_sfs = os.path.join(KL_data_dir, "whole_genome/allele_freq/adaptive_bins/all.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_pseudocount_{count_num}_chr_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        rate = pd.read_csv(input.rate, sep = "\t")
+        neutral_sfs = pd.read_csv(input.neutral_sfs, sep = "\t")
+        neutral_sfs = neutral_sfs.drop(["mu", "sum"], axis = 1)
+        
+        gene_list = list(rate["Nonsense_Gene"].unique())
+        
+        def get_mu_list(rate, gene):
+            return list(rate[rate["Nonsense_Gene"] == gene]["mu_index"])
+
+        def get_neutral_sfs(neutral_sfs, mu_index, sample_size):
+
+            sfs_segment = pd.DataFrame(neutral_sfs.iloc[mu_index]).reset_index()
+
+            return list(sfs_segment["index"].sample(n = sample_size, weights = sfs_segment[mu_index], replace = True))
+
+        for gene in gene_list:
+            mu_index_sample = random.choices(get_mu_list(rate, gene), k=int(wildcards.count_num))            
+            mu_index_sample.sort()
+            
+            sample_counter = Counter(mu_index_sample)
+
+            freq_bin_list = []
+
+            for i in sample_counter:
+                freq_bin_list.extend(get_neutral_sfs(neutral_sfs, i, sample_counter[i]))
+
+            rate_pseudocount = pd.DataFrame(zip(mu_index_sample, freq_bin_list), columns = ["mu_index", "Freq_bin"])
+            rate_pseudocount["Nonsense_Gene"] = gene
+            
+            rate = pd.concat([rate, rate_pseudocount])
+        
+        rate.to_csv(output[0], sep = "\t", index = None)
+
+rule pivot_by_genes:
+    input:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_chr_{chrom}.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_{cutoff}_pivot_chr_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        rate = pd.read_csv(input[0], sep = "\t")
+        
+        rate["exist"] = 1
+        
+        rate["last_digit"] = rate["Nonsense_Gene"].str.strip().str[-1].astype(int)
+        
+        if wildcards.cutoff == "below_5":
+            rate = rate[rate["last_digit"] <= 5]
+        elif wildcards.cutoff == "above_5":
+            rate = rate[rate["last_digit"] > 5]
+        elif "digit" in wildcards.cutoff:
+            digit = int(wildcards.cutoff.split("_")[-1])
+            rate = rate[rate["last_digit"] == digit]
+        elif "gene" in wildcards.cutoff:
+            gene = wildcards.cutoff.split("_")[-1]
+            rate = rate[rate["Nonsense_Gene"] == gene]
+            
+        rate_pivot = rate.pivot(values = "exist", columns='Nonsense_Gene')
+        
+        rate_pivot = rate_pivot.fillna(0)
+        
+        rate_pivot.insert(0, 'Freq_bin', rate["Freq_bin"])
+        rate_pivot.insert(0, 'mu_index', rate["mu_index"])
+
+        rate_pivot.to_csv(output[0], sep = "\t", index = None)
+        
+
+        
+rule get_KL_by_genes:
+    input:
+        data = os.path.join(scratch_dir, "kl_input/" + file_directory + "nonsense_{cutoff}_pivot_chr_{chrom}.tsv"),
+        result = os.path.join(KL_data_dir, "raklette_output/" + file_directory + "nonsense_{cutoff}_pivot_chr_{chrom}_chunksize_{chunksize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}.pkl"),
+        model = os.path.join(KL_data_dir, "raklette_output/" + file_directory + "nonsense_{cutoff}_pivot_chr_{chrom}_chunksize_{chunksize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}.model")
+    output:
+        os.path.join(KL_data_dir, "raklette_output/" + file_directory + "nonsense_{cutoff}_pivot_chr_{chrom}_chunksize_{chunksize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}_KL.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        with open(input.result, 'rb') as handle:
+            result = pickle.load(handle)
+            
+        with open(input.model, 'rb') as handle:
+            dictionary = pickle.load(handle)
+            
+        ref_mu_ii = result["ref_mu_ii"]
+        neut_sfs_full = result["neut_sfs_full"]
+        
+        KL = dictionary["KL"]
+        guide = dictionary["guide"]
+
+        beta_neut = KL.beta_neut
+        beta_neut_full = KL.beta_neut_full
+        
+        ## get beta_cov median, quantiles 0.05, quantile 0.95
+        beta_cov = guide.median()['beta_cov']
+        beta_cov_trans = torch.cumsum(beta_cov, dim=-1)
+        
+        beta_cov_5 = guide.quantiles(0.05)['beta_cov']
+        beta_cov_trans_5 = torch.cumsum(beta_cov_5, dim=-1)
+        
+        beta_cov_95 = guide.quantiles(0.95)['beta_cov']
+        beta_cov_trans_95 = torch.cumsum(beta_cov_95, dim=-1)
+        
+        ## calculate posterior probs
+        post_probs = raklette.softmax(raklette.pad(beta_neut - beta_cov_trans)).detach().numpy()
+        
+        KL_fw_post = raklette.KL_fw(neut_sfs_full[ref_mu_ii,:].detach().numpy(), post_probs)
+        KL_rv_post = raklette.KL_rv(neut_sfs_full[ref_mu_ii,:].detach().numpy(), post_probs)
+        
+        df = pd.read_csv(input.data, sep = "\t")
+        
+        df = pd.DataFrame(zip(list(df.columns[2:]), list(KL_fw_post), list(KL_rv_post)), columns = ["Gene", "KL_fw", "KL_rv"])
+        
+        ## add 0.05 and 0.95 quantiles
+        post_probs = raklette.softmax(raklette.pad(beta_neut - beta_cov_trans_5)).detach().numpy()
+        
+        KL_fw_post = raklette.KL_fw(neut_sfs_full[ref_mu_ii,:].detach().numpy(), post_probs)
+        KL_rv_post = raklette.KL_rv(neut_sfs_full[ref_mu_ii,:].detach().numpy(), post_probs)
+        
+        df["KL_fw_05"] = list(KL_fw_post[0])
+        df["KL_rv_05"] = list(KL_rv_post[0])
+        
+        post_probs = raklette.softmax(raklette.pad(beta_neut - beta_cov_trans_95)).detach().numpy()
+        
+        KL_fw_post = raklette.KL_fw(neut_sfs_full[ref_mu_ii,:].detach().numpy(), post_probs)
+        KL_rv_post = raklette.KL_rv(neut_sfs_full[ref_mu_ii,:].detach().numpy(), post_probs)
+        
+        df["KL_fw_95"] = list(KL_fw_post[0])
+        df["KL_rv_95"] = list(KL_rv_post[0])
+        
+        
+        df.to_csv(output[0], sep = "\t", index = None)
+        
+#####################################################################################################################
+
+########################################## calculate LOEUF ##########################################################        
+rule calculate_LOEUF:
+    input:
+        rates = os.path.join(KL_data_dir, "whole_exome/nonsense/HC_{chrom}.tsv"),
+        neutral_sfs = os.path.join(KL_data_dir, "whole_exome/freq_bins/freq_bin_9_all.tsv"),
+    output:
+        os.path.join(KL_data_dir, "lof/loeuf/LOEUF_results_gnomADv4_chr_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+
+            rate = pd.read_csv(input.rates, sep = "\t")
+                        
+            neutral_sfs = pd.read_csv(input.neutral_sfs, sep = "\t")
+            
+            neutral_sfs = neutral_sfs.rename({"0.0": "p_monomorphic"}, axis = 1)
+            neutral_sfs["p_polymorphic"] = 1 - neutral_sfs["p_monomorphic"]
+
+            rate = rate.merge(neutral_sfs[["mu", "p_polymorphic"]], how = "left", on = "mu")
+            rate["obs_polymorphic"] = rate["Freq_bin_9"].astype(bool).astype(int)
+            rate_pergene = rate[["Gene", "p_polymorphic", "obs_polymorphic"]].groupby("Gene").sum()
+            
+            rate_pergene = rate_pergene.reset_index()
+            
+            from scipy.stats import poisson
+
+            def get_upper_bound(count, expected):
+
+                k = count
+
+                lambd_list = np.linspace(0,2,2001)
+                pmf = [poisson.pmf(k, lambd * expected) for lambd in lambd_list]
+                dist_df = pd.DataFrame(zip(lambd_list, pmf), columns = ["Lambda", "pmf"])
+
+                dist_df["pmf"] = dist_df["pmf"]/dist_df["pmf"].sum()
+                dist_df["cdf"] = np.cumsum(dist_df["pmf"])
+
+                dist_df_upper = dist_df[(dist_df["cdf"] < 0.95)]
+
+                upper_bound = dist_df_upper[dist_df_upper["cdf"] == dist_df_upper["cdf"].max()]
+
+                return upper_bound
+            
+            rate_pergene['LOEUF'] = rate_pergene.apply(lambda row: get_upper_bound(row["obs_polymorphic"], row["p_polymorphic"]), axis = 1)
+            
+#             rate_pergene["LOEUF"] = rate_pergene["LOEUF"].str.split(expand = True)[4]  
+#             rate_pergene["LOEUF"] = rate_pergene["LOEUF"].astype(float)
+
+            rate_pergene.to_csv(output[0], sep = "\t", index = None) 

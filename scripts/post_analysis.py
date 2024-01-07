@@ -7,6 +7,24 @@ import pyro.distributions.constraints as constraints
 from pyro.nn import PyroModule
 from pyro.infer import Predictive
 
+scratch_dir = "/n/scratch3/users/d/djl34/"
+
+def get_file_header(header, sample_size, lr, gamma, chunksize, epoch, cov_prior):
+    
+    filename = os.path.join(KL_data_dir, "raklette_output/" + file_directory + header)
+    
+    if sample_size == -1:
+        return filename + "_chunk_"  + str(chunksize) + "_covonly_lr_" + str(lr) + "_gamma_" + str(gamma) +"_epoch_" + str(epoch)+ "_covprior_" + str(cov_prior)
+    else:
+        return filename + "sample_"+ str(sample_size) +"_chunk_" + str(chunksize) + "_covonly_lr_" + str(lr) + "_gamma_" + str(gamma) +"_epoch_" + str(epoch)+ "_covprior_" + str(cov_prior)
+
+
+def read_post_analysis(file_header):    
+    with open(file_header + ".pkl", 'rb') as handle:
+        dictionary = pickle.load(handle)
+    
+    return dictionary
+    
 def read_model(file_header):
     
     with open(file_header + ".model", 'rb') as handle:
@@ -42,7 +60,7 @@ def get_beta_cov_trans(dictionary):
 
 def get_n_sites(file_header):
     
-    variants = "/n/scratch3/users/d/djl34/kl_input/"+ file_directory + file_header + "_length.tsv"
+    variants =  scratch_dir + "kl_input/" + "/".join("_".join(file_header.split("_")[0:-9]).split("/")[-4:]) + "_length.tsv"
     
 #     print(variants)
     
@@ -50,14 +68,20 @@ def get_n_sites(file_header):
         
     return int(df.iloc[0, 0])
 
-def freq_bin_to_AF_range(bin_num):
+def freq_bin_to_AF_range(bin_num, short = False):
     if bin_num == 0:
-        return "0"
+        return "Monomorphic"
     elif bin_num == 1:
-        return "<1e-05 (singleton)"
+        if short:
+            return "Singleton"
+        return "<1e-05 (Singleton)"
     elif bin_num == 2:
+        if short:
+            return "Doubleton"
         return "<1.7e-05 (doubleton)"
     elif bin_num == 3:
+        if short:
+            return "Tripleton"
         return "<2.3e-05 (tripleton)"
     elif bin_num == 4:
         return "<3.6e-05"
