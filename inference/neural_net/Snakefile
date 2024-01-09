@@ -1,0 +1,446 @@
+import os
+import sys
+import glob
+import numpy as np
+import pandas as pd
+import math
+import sys
+import random
+import pickle
+import csv
+
+import dask.dataframe as dd
+import dask.array as da
+from dask.distributed import Client
+
+import random
+
+from collections import Counter
+
+import torch
+import pyro
+import pyro.distributions as dist
+import pyro.distributions.constraints as constraints
+from pyro.nn import PyroModule
+
+from tqdm import tqdm
+from torch.utils.data import Dataset, DataLoader
+
+sys.path.insert(0, '/home/djl34/lab_pd/kl/git/KL/scripts')
+import raklette
+from run_raklette import run_raklette
+from run_raklette import TSVDataset
+from others import round_sig
+
+#include rules
+include: "/home/djl34/lab_pd/kl/git/KL/scripts/Snakefile"
+
+factor = 1.0
+
+def get_mem_mb(wildcards, attempt):
+    return attempt * 5000 * factor
+
+
+###################################################################################################################
+
+KL_data_dir = "/home/djl34/lab_pd/kl/data"
+pd_data_dir = "/home/djl34/lab_pd/data"
+scratch_dir = "/n/scratch/users/d/djl34"
+
+base_set = ["A", "C", "T", "G"]
+all_chrom_set = [str(x) for x in range(1, 23)]
+even_chrom_set = [str(2 * x) for x in range(1, 12)]
+
+chrom_set = all_chrom_set
+chrom_set = ["2"]
+# chrom_set = ["-2"]
+# chrom_set = even_chrom_set
+
+# cutoff_list = [0, 1, 2, 3, 4, 5]
+
+wildcard_constraints:
+    chrom="\d+",
+    chrom_all="[-+]?\d+",
+    epoch="\d+",
+    interval_min="[+-]?([0-9]*[.])?[0-9]+",
+    interval_max="[+-]?([0-9]*[.])?[0-9]+",
+    samplesize="\d+",
+    count_num="\d+",
+
+
+file_directory = "single_feature/zoonomia/"
+
+###################################################################################################################
+header_names = ["zoonomia_"]
+
+interval_list = []
+
+interval_list = range(10)
+interval_list = [x/10 for x in interval_list]
+
+interval_list = [str(x) + "_" + str(round_sig(x + 0.1, 1)) for x in interval_list]
+
+filename_list = [os.path.join(scratch_dir, "kl_input/" + file_directory + "{chrom}.tsv")]
+
+filename_list.extend([os.path.join(scratch_dir, "kl_input/" + file_directory + "gene_edges_"+ interval +"_chr_{chrom}.tsv") 
+                     for interval in interval_list])
+
+filename_list.extend([os.path.join(scratch_dir, "kl_input/" + file_directory + "gene_edges_"+ interval + "_chr_{chrom}_sample_10000000/chunk_100000_0.tsv") for interval in interval_list])
+
+filename_list.extend([os.path.join(scratch_dir, "kl_input/" + file_directory + "gene_edges_"+ interval + "_chr_{chrom}_sample_10000000_length.tsv") for interval in interval_list])
+
+filename_list.extend([os.path.join(KL_data_dir, "raklette_output/" + file_directory + "gene_edges_"+ interval +"_chr_{chrom}_sample_10000000_chunk_100000_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}_original.pkl") for interval in interval_list])
+
+filename_list.extend([os.path.join(KL_data_dir, "raklette_output/" + file_directory + "gene_edges_"+ interval +"_chr_{chrom}_sample_10000000_chunk_100000_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}_neural_net.pkl") for interval in interval_list])
+
+
+filename_list = [filename.replace("{learning_rate}", str(0.01)) for filename in filename_list]
+filename_list = [filename.replace("{gamma}", str(0.5)) for filename in filename_list]
+filename_list = [filename.replace("{epoch}", str(50)) for filename in filename_list]
+filename_list = [filename.replace("{cov_prior}", str(0.1)) for filename in filename_list]
+
+filename_list = [filename.replace("{chrom}", str(chromosome)) for filename in filename_list for chromosome in chrom_set]
+
+
+rule all:
+    input:
+        filename_list
+########################################## zoonomia genes ##############################################
+
+rule make_tsv_files:
+    input:
+        os.path.join(KL_data_dir, "whole_genome/enhancer/{chrom}/_metadata")
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:            
+            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+
+            print(rate.columns)
+
+            include_columns = ["mu_index", "Freq_bin_adaptive", "phyloP_pos"]
+
+            rate = rate[include_columns]
+
+            rate = rate[rate["phyloP_pos"] > 0]
+
+            rate = rate.rename(columns={"phyloP_pos": "phyloP", "Freq_bin_adaptive": "Freq_bin"})  
+            rate["phyloP"] = rate["phyloP"]/8.903
+
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+            
+rule zoonomia_interval:
+    input:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "{chrom}.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "gene_edges_{interval_min}_{interval_max}_chr_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=1,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+
+            rate = dd.read_csv(input[0], sep = "\t")
+
+            print(rate.columns)
+            
+            include_columns = ["mu_index", "Freq_bin"]
+            
+            interval_min = float(wildcards.interval_min)
+            interval_max = float(wildcards.interval_max)
+            
+            column_name = "phyloP_" + str(interval_min) + "_to_" + str(interval_max)
+            
+            include_columns.append(column_name)
+                
+            rate[column_name] = rate["phyloP"].where((rate["phyloP"] >= interval_min) & (rate["phyloP"] < interval_max), 0)
+            rate[column_name] = rate[column_name].astype(bool).astype(int)
+            
+            rate = rate[rate[column_name] == 1]
+            
+            rate = rate[include_columns]
+
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+            
+rule run_KL_cov_original:
+    input:
+        variants = os.path.join(scratch_dir, "kl_input/" + "{header}/chunk_{chunksize}_0.tsv"),
+        length_file = os.path.join(scratch_dir, "kl_input/"+ "{header}_length.tsv"),
+        neutral_sfs = os.path.join(KL_data_dir, "whole_genome/allele_freq/adaptive_bins/all.tsv"),
+#         neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all.tsv",
+#         neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all_original.tsv"
+    output:
+        os.path.join(KL_data_dir, "raklette_output/"+ "{header}_chunk_{chunksize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}_original.pkl"),
+        os.path.join(KL_data_dir, "raklette_output/"+ "{header}_chunk_{chunksize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}_original.model")
+    resources:
+        partition="short",
+        runtime="0-3:00",
+        cpus_per_task=10,
+        mem_mb=10000
+    run:
+        
+        input_filename = input.variants
+        output_filename = output[0]
+        neutral_sfs_filename = input.neutral_sfs
+        
+        input_length_file = input.length_file
+        
+        chunksize = int(wildcards.chunksize)
+        num_epochs = int(wildcards.epoch)
+        cov_prior = float(wildcards.cov_prior)
+        learning_rate = float(wildcards.learning_rate)
+        gamma = float(wildcards.gamma)
+        
+        input_directory = "/".join(input_filename.split("/")[:-1]) + "/"
+    
+        df = pd.read_csv(input_length_file, sep = "\t", header = None)
+        nb_samples = df[0][0]
+        nb_features = df[0][1] - 2
+
+        print("number of samples: " + str(nb_samples), flush = True)
+
+        if nb_samples == 0:
+            f = open(output_filename, "w")
+            f.write("no sample")
+            f.close()
+        else:        
+            with open(input_filename) as f:
+                first_line = f.readline()
+            header = first_line.split("\t")
+            
+            if chunksize == 0:
+                print("number of chunks: " + str(0), flush = True)
+            else:
+                print("number of chunks: " + str(nb_samples/chunksize), flush = True)
+
+            dataset = TSVDataset(input_directory, chunksize=chunksize, nb_samples = nb_samples, header_all = header, features = header)
+            loader = DataLoader(dataset, batch_size=1, num_workers=1, shuffle=False)
+
+            #lets run raklette
+            run_raklette(raklette.raklette_cov, loader, raklette.post_analysis_cov, nb_features, num_epochs, neutral_sfs_filename, output_filename, float(learning_rate), float(gamma), cov_sigma_prior = torch.tensor(cov_prior, dtype=torch.float32))
+            
+rule run_KL_cov_neural_net:
+    input:
+        variants = os.path.join(scratch_dir, "kl_input/" + "{header}/chunk_{chunksize}_0.tsv"),
+        length_file = os.path.join(scratch_dir, "kl_input/"+ "{header}_length.tsv"),
+        neutral_sfs = os.path.join(KL_data_dir, "whole_genome/allele_freq/adaptive_bins/all.tsv"),
+#         neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all.tsv",
+#         neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all_original.tsv"
+    output:
+        os.path.join(KL_data_dir, "raklette_output/"+ "{header}_chunk_{chunksize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}_neural_net.pkl"),
+        os.path.join(KL_data_dir, "raklette_output/"+ "{header}_chunk_{chunksize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}_neural_net.model")
+    resources:
+        partition="short",
+        runtime="0-3:00",
+        cpus_per_task=10,
+        mem_mb=10000
+    run:
+        
+        input_filename = input.variants
+        output_filename = output[0]
+        neutral_sfs_filename = input.neutral_sfs
+        
+        input_length_file = input.length_file
+        
+        chunksize = int(wildcards.chunksize)
+        num_epochs = int(wildcards.epoch)
+        cov_prior = float(wildcards.cov_prior)
+        learning_rate = float(wildcards.learning_rate)
+        gamma = float(wildcards.gamma)
+        
+        input_directory = "/".join(input_filename.split("/")[:-1]) + "/"
+    
+        df = pd.read_csv(input_length_file, sep = "\t", header = None)
+        nb_samples = df[0][0]
+        nb_features = df[0][1] - 2
+
+        print("number of samples: " + str(nb_samples), flush = True)
+
+        if nb_samples == 0:
+            f = open(output_filename, "w")
+            f.write("no sample")
+            f.close()
+        else:        
+            with open(input_filename) as f:
+                first_line = f.readline()
+            header = first_line.split("\t")
+            
+            if chunksize == 0:
+                print("number of chunks: " + str(0), flush = True)
+            else:
+                print("number of chunks: " + str(nb_samples/chunksize), flush = True)
+
+            dataset = TSVDataset(input_directory, chunksize=chunksize, nb_samples = nb_samples, header_all = header, features = header)
+            loader = DataLoader(dataset, batch_size=1, num_workers=1, shuffle=False)
+
+            #lets run raklette
+            run_raklette(raklette.raklette_neuralnet, loader, raklette.post_analysis_cov, nb_features, num_epochs, neutral_sfs_filename, output_filename, float(learning_rate), float(gamma), cov_sigma_prior = torch.tensor(cov_prior, dtype=torch.float32))
+            
+            
+                
+rule make_pvalues:
+    input:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "{chrom}.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "pvalue_chr_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=4,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:            
+            rate = dd.read_csv(input, sep = "\t")
+
+            include_columns = ["mu_index", "Freq_bin", "PhyloP_pvalue", "phyloP6"]
+            
+            def make_pvalue(x):
+                if x is None:  # Handle None values
+                    return None
+                return -1 * math.exp(x)
+                        
+            rate["PhyloP_pvalue"] = rate.apply(lambda row: make_pvalue(row["phyloP"]), axis=1)
+            
+            rate["phyloP6"] = rate["phyloP"].where((rate["phyloP"] >= 6.0/8.903) & (rate["phyloP"] < 6.4/8.903), 0)
+            rate["phyloP6"] = rate["phyloP6"].astype(bool).astype(int)
+            
+            rate = rate[include_columns]
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+            
+            
+rule make_pvalues_intercept:
+    input:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "{chrom}.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "pvalue_intercept_chr_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=4,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:            
+            rate = dd.read_csv(input, sep = "\t")
+
+            include_columns = ["mu_index", "Freq_bin", "PhyloP_pvalue", "phyloP6", "intercept"]
+            
+            def make_pvalue(x):
+                if x is None:  # Handle None values
+                    return None
+                return -1 * math.exp(x)
+                        
+            rate["PhyloP_pvalue"] = rate.apply(lambda row: make_pvalue(row["phyloP"]), axis=1)
+            
+            rate["phyloP6"] = rate["phyloP"].where((rate["phyloP"] >= 6.0/8.903) & (rate["phyloP"] < 6.4/8.903), 0)
+            rate["phyloP6"] = rate["phyloP6"].astype(bool).astype(int)
+            rate["intercept"] = 1
+            
+            rate = rate[include_columns]
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+                
+# rule make_tsv_files_even:
+#     input:
+#         [os.path.join(scratch_dir, "kl_input/" + file_directory + chrom + ".tsv") for chrom in even_chrom_set]
+#     output:
+#         os.path.join(scratch_dir, "kl_input/" + file_directory + "-2.tsv")
+#     resources:
+#         partition="short",
+#         runtime="0-12:00",
+#         cpus_per_task=5,
+#         mem_mb=25000
+#     run:
+#         with Client() as client:
+
+#             rate = dd.read_csv(input, sep = "\t")
+
+#             rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+            
+            
+rule make_phyloP6:
+    input:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "{chrom}.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "phyloP_phylo6_chr_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=4,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+
+            rate = dd.read_csv(input, sep = "\t")
+
+            print(rate.columns)
+
+            include_columns = ["mu_index", "Freq_bin", "phyloP", "phyloP6"]
+            
+            rate["phyloP6"] = rate["phyloP"].where((rate["phyloP"] >= 6.0/8.903) & (rate["phyloP"] < 6.4/8.903), 0)
+            rate["phyloP6"] = rate["phyloP6"].astype(bool).astype(int)
+            
+            rate = rate[include_columns]
+
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+            
+            
+rule make_phyloPsq_phyloP6:
+    input:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "{chrom}.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "phyloP_phyloPsq_phylo6_chr_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=4,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+
+            rate = dd.read_csv(input, sep = "\t")
+
+            print(rate.columns)
+
+            include_columns = ["mu_index", "Freq_bin", "phyloP", "phyloP^2", "phyloP6"]
+            
+            rate["phyloP6"] = rate["phyloP"].where((rate["phyloP"] >= 6.0/8.903) & (rate["phyloP"] < 6.4/8.903), 0)
+            rate["phyloP6"] = rate["phyloP6"].astype(bool).astype(int)
+            rate["phyloP^2"] = rate["phyloP"] ** 2
+
+            rate = rate[include_columns]
+
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+            
+rule make_phyloPsq_phyloP6_intercept:
+    input:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "{chrom}.tsv")
+    output:
+        os.path.join(scratch_dir, "kl_input/" + file_directory + "phyloP_phyloPsq_phylo6_intercept_chr_{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=4,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+
+            rate = dd.read_csv(input, sep = "\t")
+
+            print(rate.columns)
+
+            include_columns = ["mu_index", "Freq_bin", "phyloP", "phyloP^2", "phyloP6", "intercept"]
+            
+            rate["phyloP6"] = rate["phyloP"].where((rate["phyloP"] >= 6.0/8.903) & (rate["phyloP"] < 6.4/8.903), 0)
+            rate["phyloP6"] = rate["phyloP6"].astype(bool).astype(int)
+            rate["phyloP^2"] = rate["phyloP"] ** 2
+            rate["intercept"] = 1
+
+            rate = rate[include_columns]
+
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
