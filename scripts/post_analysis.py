@@ -7,9 +7,9 @@ import pyro.distributions.constraints as constraints
 from pyro.nn import PyroModule
 from pyro.infer import Predictive
 
-scratch_dir = "/n/scratch3/users/d/djl34/"
+scratch_dir = "/n/scratch/users/d/djl34/"
 
-def get_file_header(header, sample_size, lr, gamma, chunksize, epoch, cov_prior):
+def get_file_header(file_directory, header, sample_size, lr, gamma, chunksize, epoch, cov_prior):
     
     filename = os.path.join(KL_data_dir, "raklette_output/" + file_directory + header)
     
@@ -44,15 +44,11 @@ def get_n_cov(dictionary):
     
     return beta_cov.shape[0]
 
-def get_beta_cov_trans(dictionary):
+def get_beta_cov_trans(dictionary, name = 'beta_cov'):
     
     guide = dictionary["guide"]
-    KL = dictionary["KL"]
-    model = dictionary["model"]
-
-    beta_neut = KL.beta_neut
-    beta_neut_full = KL.beta_neut_full
-    beta_cov = guide.median()['beta_cov']
+    
+    beta_cov = guide.median()[name]
     
     beta_cov_trans = torch.cumsum(beta_cov, dim=-1)
     

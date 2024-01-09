@@ -28,7 +28,6 @@ import asyncio
 sys.path.insert(0, '/home/djl34/lab_pd/kl/git/KL/scripts')
 import raklette
 from run_raklette import run_raklette
-from run_raklette import run_raklette_cov
 from run_raklette import TSVDataset
 # from snakefile_raklette import snakefile_raklette_cov
 # from snakefile_raklette import snakefile_make_sample
@@ -43,16 +42,16 @@ def get_mem_mb(wildcards, attempt):
     return attempt * 20000 * factor
 
 def get_mem_mb_sample(wildcards, attempt):
-    return attempt * 40000 * factor
+    return attempt * 20000 * factor
 
 def get_mem_mb_length(wildcards, attempt):
-    return attempt * 5000 * factor
+    return attempt * 20000 * factor
 
 def get_mem_mb_chunks(wildcards, attempt):
-    return attempt * int(wildcards.chunksize)/1500 * factor
+    return max(attempt * int(wildcards.chunksize)/1500 * factor, 500 * factor)
 
 def get_mem_mb_raklette(wildcards, attempt):
-    return attempt* int(wildcards.chunksize)/500 * factor
+    return max(attempt* int(wildcards.chunksize)/1500 * factor, 2000 * factor)
 
 def get_mem_mb_raklette_bygene(wildcards, attempt):
     return attempt * 1000 * factor
@@ -60,7 +59,7 @@ def get_mem_mb_raklette_bygene(wildcards, attempt):
 ###################################################################################################################
 
 KL_data_dir = "/home/djl34/lab_pd/kl/data"
-scratch_dir = "/n/scratch3/users/d/djl34"
+scratch_dir = "/n/scratch/users/d/djl34"
 
 base_set = ["A", "C", "T", "G"]
 chrom_set = [str(x) for x in range(1, 23)]
@@ -80,6 +79,7 @@ wildcard_constraints:
     epoch="\d+",
     interval_min="[+-]?([0-9]*[.])?[0-9]+",
     interval_max="[+-]?([0-9]*[.])?[0-9]+",
+    cov_prior="[+-]?([0-9]*[.])?[0-9]+",
     samplesize="\d+",
     binsize="\d+"
 
@@ -87,10 +87,10 @@ wildcard_constraints:
 
 rule sample_size:
     input:
-        os.path.join(scratch_dir, "kl_input/"+ "{header}_chr_{chrom}.tsv")
+        os.path.join(scratch_dir, "kl_input/"+ "{header}.tsv")
     output:
-        first = os.path.join(scratch_dir, "kl_input/"+ "{header}_sample_{samplesize}_chr_{chrom}_sampled.tsv"),
-        second = os.path.join(scratch_dir, "kl_input/"+ "{header}_sample_{samplesize}_chr_{chrom}.tsv")
+        first = os.path.join(scratch_dir, "kl_input/"+ "{header}_sample_{samplesize}_sampled.tsv"),
+        second = os.path.join(scratch_dir, "kl_input/"+ "{header}_sample_{samplesize}.tsv")
     resources:
         partition="short",
         runtime="0-12:00",
@@ -144,12 +144,18 @@ rule make_chunks:
         
         chunksize = int(wildcards.chunksize)
         
-        with pd.read_csv(input_filename, chunksize=chunksize, sep = "\t") as reader:
-            row = 0
-            for chunk in reader:
-                print(iterator)
-                chunk.to_csv(output_dir + "/chunk_" + str(chunksize) + "_" + str(iterator) + ".tsv", sep = "\t", index = None)
-                iterator += 1
+        if chunksize == 0:
+            with Client() as client:
+                
+                df = dd.read_csv(input_filename, sep = "\t")
+                df.to_csv(output_dir + "/chunk_" + str(chunksize) + "_" + str(iterator) + ".tsv", sep = "\t", index = None, single_file = True)
+        else:
+            with pd.read_csv(input_filename, chunksize=chunksize, sep = "\t") as reader:
+                row = 0
+                for chunk in reader:
+                    print(iterator)
+                    chunk.to_csv(output_dir + "/chunk_" + str(chunksize) + "_" + str(iterator) + ".tsv", sep = "\t", index = None)
+                    iterator += 1
                            
 rule make_tsv_files_even:
     input:
@@ -186,18 +192,18 @@ rule make_tsv_files_even:
                   
 rule get_length:
     input:
-        os.path.join(scratch_dir, "kl_input/" +"{header}/chunk_{chunksize}_0.tsv")
+        os.path.join(scratch_dir, "kl_input/" +"{header}.tsv")
     output:
-        os.path.join(scratch_dir, "kl_input/"+"{header}_chunk_{chunksize}_length.tsv"),
+        os.path.join(scratch_dir, "kl_input/"+"{header}_length.tsv"),
     resources:
         partition="short",
-        runtime="0-00:10",
+        runtime="0-01:10",
         cpus_per_task=5,
         mem_mb=get_mem_mb_length
     run:
         with Client() as client:
             
-            input_filename = "_".join(input[0].split("_")[:-1]) + "_*.tsv"
+            input_filename = input[0]
             
             rate = dd.read_csv(input_filename, sep = "\t")
             
@@ -255,16 +261,16 @@ rule get_length_bygene:
 rule run_KL_cov_by_chunks:
     input:
         variants = os.path.join(scratch_dir, "kl_input/" + "{header}/chunk_{chunksize}_0.tsv"),
-        length_file = os.path.join(scratch_dir, "kl_input/" + "{header}_chunk_{chunksize}_length.tsv"),
+        length_file = os.path.join(scratch_dir, "kl_input/"+ "{header}_length.tsv"),
         neutral_sfs = os.path.join(KL_data_dir, "whole_genome/allele_freq/adaptive_bins/all.tsv"),
 #         neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all.tsv",
 #         neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all_original.tsv"
     output:
-        os.path.join(KL_data_dir, "raklette_output/"+ "{header}_chunksize_{chunksize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}.pkl"),
-        os.path.join(KL_data_dir, "raklette_output/"+ "{header}_chunksize_{chunksize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}.model")
+        os.path.join(KL_data_dir, "raklette_output/"+ "{header}_chunk_{chunksize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}.pkl"),
+        os.path.join(KL_data_dir, "raklette_output/"+ "{header}_chunk_{chunksize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}.model")
     resources:
         partition="short",
-        runtime="0-05:00",
+        runtime="0-3:00",
         cpus_per_task=10,
         mem_mb=get_mem_mb_raklette
     run:
@@ -297,103 +303,166 @@ rule run_KL_cov_by_chunks:
             with open(input_filename) as f:
                 first_line = f.readline()
             header = first_line.split("\t")
-
-            print("number of chunks " + str(nb_samples/chunksize), flush = True)
+            
+            if chunksize == 0:
+                print("number of chunks: " + str(0), flush = True)
+            else:
+                print("number of chunks: " + str(nb_samples/chunksize), flush = True)
 
             dataset = TSVDataset(input_directory, chunksize=chunksize, nb_samples = nb_samples, header_all = header, features = header)
             loader = DataLoader(dataset, batch_size=1, num_workers=1, shuffle=False)
 
             #lets run raklette
-            run_raklette_cov(loader, nb_features, num_epochs, neutral_sfs_filename, output_filename, 
+            run_raklette(loader, nb_features, num_epochs, neutral_sfs_filename, output_filename, 
                          float(learning_rate), float(gamma), 
                              cov_sigma_prior = torch.tensor(cov_prior, dtype=torch.float32))
             
-rule run_KL_cov_bygene:
-    input:
-        variants = os.path.join(scratch_dir, "kl_input/" + "{header}_chr_{chrom_all}_bygene/done"),
-        length_file = os.path.join(scratch_dir, "kl_input/" + "{header}_chr_{chrom_all}_bygene/length/done"),
-        neutral_sfs = os.path.join(KL_data_dir, "whole_genome/allele_freq/adaptive_bins/all.tsv"),
-        neutral_sfs_2 = os.path.join(KL_data_dir, "whole_genome/neutral/2_bins/all.tsv"),
-#         neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all.tsv",
-#         neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all_original.tsv"
-    output:
-        os.path.join(KL_data_dir, "raklette_output/"+ "{header}_chr_{chrom_all}_bygene/binsize_{binsize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}.done_{end_digits}"),
-    resources:
-        partition="short",
-        runtime="0-01:00",
-        cpus_per_task=5,
-        mem_mb=get_mem_mb_raklette_bygene
-    run:        
-        input_directory = "/".join(input.variants.split("/")[:-1])
-        
-        variant_file_list = glob.glob(input_directory + "/*" + wildcards.end_digits +".tsv")
-        
-        output_directory = "/".join(output[0].split("/")[:-1])
-        
-        output_header = ".".join(output[0].split("/")[-1].split(".")[:-1])
-        
-        if int(wildcards.binsize) == int(2):
-            neutral_sfs_filename = input.neutral_sfs_2
-        if int(wildcards.binsize) == int(10):
-            neutral_sfs_filename = input.neutral_sfs
             
-        chunksize = 0
-        num_epochs = int(wildcards.epoch)
-        cov_prior = float(wildcards.cov_prior)
-        learning_rate = float(wildcards.learning_rate)
-        gamma = float(wildcards.gamma)
+# rule run_KL_cov_by_chunks_new:
+#     input:
+#         variants = os.path.join(scratch_dir, "kl_input/" + "{header}/chunk_{chunksize}_0.tsv"),
+#         length_file = os.path.join(scratch_dir, "kl_input/" + "{header}_chunk_{chunksize}_length.tsv"),
+#         neutral_sfs = os.path.join(KL_data_dir, "whole_genome/allele_freq/adaptive_bins/all.tsv"),
+# #         neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all.tsv",
+# #         neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all_original.tsv"
+#     output:
+#         os.path.join(KL_data_dir, "raklette_output/"+ "{header}_chunk_{chunksize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}_new.pkl"),
+#         os.path.join(KL_data_dir, "raklette_output/"+ "{header}_chunk_{chunksize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}_new.model")
+#     resources:
+#         partition="short",
+#         runtime="0-3:00",
+#         cpus_per_task=10,
+#         mem_mb=get_mem_mb_raklette
+#     run:
         
-#         loop = asyncio.get_event_loop() # Have a new event loop
+#         input_filename = input.variants
+#         output_filename = output[0]
+#         neutral_sfs_filename = input.neutral_sfs
         
-#         loop = asyncio.new_event_loop()
-#         asyncio.set_event_loop(loop)
+#         input_length_file = input.length_file
         
-        def run_KL_per_variant_filename(variant_filename):
-            input_filename = variant_filename
+#         chunksize = int(wildcards.chunksize)
+#         num_epochs = int(wildcards.epoch)
+#         cov_prior = float(wildcards.cov_prior)
+#         learning_rate = float(wildcards.learning_rate)
+#         gamma = float(wildcards.gamma)
+        
+#         input_directory = "/".join(input_filename.split("/")[:-1]) + "/"
+    
+#         df = pd.read_csv(input_length_file, sep = "\t", header = None)
+#         nb_samples = df[0][0]
+#         nb_features = df[0][1] - 2
+
+#         print("number of samples: " + str(nb_samples), flush = True)
+
+#         if nb_samples == 0:
+#             f = open(output_filename, "w")
+#             f.write("no sample")
+#             f.close()
+#         else:        
+#             with open(input_filename) as f:
+#                 first_line = f.readline()
+#             header = first_line.split("\t")
+            
+#             if chunksize == 0:
+#                 print("number of chunks: " + str(0), flush = True)
+#             else:
+#                 print("number of chunks: " + str(nb_samples/chunksize), flush = True)
+
+#             dataset = TSVDataset(input_directory, chunksize=chunksize, nb_samples = nb_samples, header_all = header, features = header)
+#             loader = DataLoader(dataset, batch_size=1, num_workers=1, shuffle=False)
+
+#             #lets run raklette
+#             run_raklette.run_raklette_cov_new(loader, nb_features, num_epochs, neutral_sfs_filename, output_filename, 
+#                          float(learning_rate), float(gamma), 
+#                              cov_sigma_prior = torch.tensor(cov_prior, dtype=torch.float32))
+            
+# rule run_KL_cov_bygene:
+#     input:
+#         variants = os.path.join(scratch_dir, "kl_input/" + "{header}_chr_{chrom_all}_bygene/done"),
+#         length_file = os.path.join(scratch_dir, "kl_input/" + "{header}_chr_{chrom_all}_bygene/length/done"),
+#         neutral_sfs = os.path.join(KL_data_dir, "whole_genome/allele_freq/adaptive_bins/all.tsv"),
+#         neutral_sfs_2 = os.path.join(KL_data_dir, "whole_genome/neutral/2_bins/all.tsv"),
+# #         neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all.tsv",
+# #         neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all_original.tsv"
+#     output:
+#         os.path.join(KL_data_dir, "raklette_output/"+ "{header}_chr_{chrom_all}_bygene/binsize_{binsize}_covonly_lr_{learning_rate}_gamma_{gamma}_epoch_{epoch}_covprior_{cov_prior}.done_{end_digits}"),
+#     resources:
+#         partition="short",
+#         runtime="0-01:00",
+#         cpus_per_task=5,
+#         mem_mb=get_mem_mb_raklette_bygene
+#     run:        
+#         input_directory = "/".join(input.variants.split("/")[:-1])
+        
+#         variant_file_list = glob.glob(input_directory + "/*" + wildcards.end_digits +".tsv")
+        
+#         output_directory = "/".join(output[0].split("/")[:-1])
+        
+#         output_header = ".".join(output[0].split("/")[-1].split(".")[:-1])
+        
+#         if int(wildcards.binsize) == int(2):
+#             neutral_sfs_filename = input.neutral_sfs_2
+#         if int(wildcards.binsize) == int(10):
+#             neutral_sfs_filename = input.neutral_sfs
+            
+#         chunksize = 0
+#         num_epochs = int(wildcards.epoch)
+#         cov_prior = float(wildcards.cov_prior)
+#         learning_rate = float(wildcards.learning_rate)
+#         gamma = float(wildcards.gamma)
+        
+# #         loop = asyncio.get_event_loop() # Have a new event loop
+        
+# #         loop = asyncio.new_event_loop()
+# #         asyncio.set_event_loop(loop)
+        
+#         def run_KL_per_variant_filename(variant_filename):
+#             input_filename = variant_filename
                         
-            gene_name = input_filename.split("/")[-1]
-            gene_name = gene_name.split(".")[0]
+#             gene_name = input_filename.split("/")[-1]
+#             gene_name = gene_name.split(".")[0]
             
-            print("for gene: " + gene_name, flush = True)
+#             print("for gene: " + gene_name, flush = True)
 
-            output_filename = output_directory + "/" + output_header + "_" + gene_name + ".pkl"
+#             output_filename = output_directory + "/" + output_header + "_" + gene_name + ".pkl"
             
-            input_length_file = input_directory + "/length/" + gene_name + ".tsv"
+#             input_length_file = input_directory + "/length/" + gene_name + ".tsv"
 
-            df = pd.read_csv(input_length_file, sep = "\t", header = None)
-            nb_samples = df[0][0]
-            nb_features = df[0][1] - 2
+#             df = pd.read_csv(input_length_file, sep = "\t", header = None)
+#             nb_samples = df[0][0]
+#             nb_features = df[0][1] - 2
 
-            print("number of samples: " + str(nb_samples), flush = True)
+#             print("number of samples: " + str(nb_samples), flush = True)
 
-            if nb_samples == 0:
-                f = open(output_filename, "w")
-                f.write("no sample")
-                f.close()
-            else:        
-                with open(input_filename) as f:
-                    first_line = f.readline()
-                header = first_line.split("\t")
+#             if nb_samples == 0:
+#                 f = open(output_filename, "w")
+#                 f.write("no sample")
+#                 f.close()
+#             else:        
+#                 with open(input_filename) as f:
+#                     first_line = f.readline()
+#                 header = first_line.split("\t")
 
-                print("number of chunks " + str(nb_samples/chunksize), flush = True)
+#                 print("number of chunks " + str(nb_samples/chunksize), flush = True)
 
-                dataset = TSVDataset(input_filename, chunksize=chunksize, nb_samples = nb_samples, header_all = header, features = header)
-                loader = DataLoader(dataset, batch_size=1, num_workers=1, shuffle=False)
+#                 dataset = TSVDataset(input_filename, chunksize=chunksize, nb_samples = nb_samples, header_all = header, features = header)
+#                 loader = DataLoader(dataset, batch_size=1, num_workers=1, shuffle=False)
 
-                #lets run raklette
-                run_raklette_cov(loader, nb_features, num_epochs, neutral_sfs_filename, output_filename, 
-                             float(learning_rate), float(gamma), 
-                                 cov_sigma_prior = torch.tensor(cov_prior, dtype=torch.float32))
+#                 #lets run raklette
+#                 run_raklette_cov(loader, nb_features, num_epochs, neutral_sfs_filename, output_filename, 
+#                              float(learning_rate), float(gamma), 
+#                                  cov_sigma_prior = torch.tensor(cov_prior, dtype=torch.float32))
             
-            return None
+#             return None
         
-        for variant_filename in variant_file_list:
-            run_KL_per_variant_filename(variant_filename)
-#         looper = asyncio.gather(*[run_KL_per_variant_filename(variant_filename) for variant_filename in variant_file_list])         # Run the loop
+#         for variant_filename in variant_file_list:
+#             run_KL_per_variant_filename(variant_filename)
+# #         looper = asyncio.gather(*[run_KL_per_variant_filename(variant_filename) for variant_filename in variant_file_list])         # Run the loop
         
-#         results = loop.run_until_complete(looper)                                    # Wait until finish
+# #         results = loop.run_until_complete(looper)                                    # Wait until finish
    
-        f = open(output[0], "w")
-        f.write("done running analysis")
-        f.close()
+#         f = open(output[0], "w")
+#         f.write("done running analysis")
+#         f.close()
 
