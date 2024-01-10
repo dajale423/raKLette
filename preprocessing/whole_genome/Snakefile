@@ -1,3 +1,6 @@
+## This is a snakemake to organize the dataframes for whole genomes and whole exomes
+## I am making two different dataframes for the whole genomes and all of the exomes.
+
 import os
 import sys
 import glob
@@ -13,12 +16,15 @@ from dask.distributed import Client
 sys.path.insert(0,'/home/djl34/lab_pd/bin')
 import genomic
 
+vep = "/home/djl34/bin/ensembl-vep/vep"
+
 pd_data_dir = "/home/djl34/lab_pd/data"
 KL_data_dir = "/home/djl34/lab_pd/kl/data"
-scratch_dir = "/n/scratch3/users/d/djl34"
+scratch_dir = "/n/scratch/users/d/djl34/"
 
 base_set = ["A", "C", "T", "G"]
-chrom_set = [str(x) for x in range(1, 23)]
+all_chrom_set = [str(x) for x in range(1, 23)]
+chrom_set = all_chrom_set
 # chrom_set = ["22"]
 
 print(chrom_set)
@@ -27,41 +33,29 @@ wildcard_constraints:
     chrom="\d+"
     
 def get_mem_mb(wildcards, attempt):
-    return attempt * 40000
+    return 40000 + attempt * 30000
 
-# def get_mem_mb_8(wildcards, attempt):
-#     return attempt * 80000
-#     return attempt * 120000
+def get_mem_mb_small(wildcards, attempt):
+    return attempt * 10000
 
+# include: "/home/djl34/kl_git/preprocessing/download/Snakefile"
+
+    
+# filename_list = [os.path.join(KL_data_dir, "whole_genome/ukb_ac/{chrom}/_metadata")]
+filename_list = [os.path.join(scratch_dir, "whole_genome/ukb_ac/{chrom}/_metadata"),
+                 os.path.join(scratch_dir, "whole_genome/AN_interpolate/{chrom}/_metadata"),
+                os.path.join(KL_data_dir, "whole_genome/filtered/{chrom}/_metadata")]
+
+filename_list = [os.path.join(KL_data_dir, "whole_genome/gnomad_ac/{chrom}/_metadata")]
+
+input_list = [filename.replace("{chrom}", str(chromosome)) for filename in filename_list for chromosome in chrom_set]
+    
 rule all:
     input:
-#         [os.path.join(KL_data_dir, "whole_genome/mu_filtered/" + chrom +"/_metadata") for chrom in chrom_set],
-#         [os.path.join(scratch_dir, "whole_genome/gnomad_ac/" + chrom +"/_metadata") for chrom in chrom_set],
-#         [os.path.join(scratch_dir, "whole_genome/gnomad_cov/" + chrom +"/_metadata") for chrom in chrom_set],
-#         [os.path.join(KL_data_dir, "whole_genome/new_rate_bin/" + chrom +"/_metadata") for chrom in chrom_set],
-        [os.path.join(scratch_dir, "whole_genome/neutral/" + chrom +"/_metadata") for chrom in chrom_set],
-        [os.path.join(scratch_dir, "whole_genome/allele_freq/" + chrom +"/_metadata") for chrom in chrom_set],
-        [os.path.join(KL_data_dir, "whole_genome/neutral_only/" + chrom +"/_metadata") for chrom in chrom_set],
-        [os.path.join(scratch_dir, "whole_genome/allele_freq/5_bins/" + chrom +"/_metadata") for chrom in chrom_set],
-        [os.path.join(scratch_dir, "whole_genome/allele_freq/5_bins/" + chrom +".tsv") for chrom in chrom_set],
-        [os.path.join(scratch_dir, "whole_genome/allele_freq/adaptive_bins/" + chrom +"/_metadata") for chrom in chrom_set],
-        [os.path.join(scratch_dir, "whole_genome/allele_freq/adaptive_bins/" + chrom +".tsv") for chrom in chrom_set],
-        os.path.join(KL_data_dir, "whole_genome/allele_freq/adaptive_bins/all.tsv"),
-        os.path.join(KL_data_dir, "whole_genome/allele_freq/5_bins/all.tsv"),
-        [os.path.join(KL_data_dir, "whole_genome/mu_index/" + chrom +"/_metadata") for chrom in chrom_set],
-        [os.path.join(scratch_dir, "whole_genome/windows/" + chrom +"/_metadata") for chrom in chrom_set],
-        [os.path.join(KL_data_dir, "whole_genome/exon/" + chrom +"/_metadata") for chrom in chrom_set],
-        [os.path.join(scratch_dir, "whole_genome/phylop/" + chrom +"/_metadata") for chrom in chrom_set],
-#         [os.path.join(scratch_dir, "whole_genome/phylop_normalized/" + chrom +"/_metadata") for chrom in chrom_set],
-#         [os.path.join(scratch_dir, "whole_genome/dhs/" + chrom +"/_metadata") for chrom in chrom_set],
-        [os.path.join(scratch_dir, "whole_genome/dhs_core/" + chrom +"/_metadata") for chrom in chrom_set],
-        [os.path.join(scratch_dir, "whole_genome/footprints/" + chrom +"/_metadata") for chrom in chrom_set],
-        [os.path.join(KL_data_dir, "spliceai/spliceai_delta_scores.raw.snv.chrom_" + chrom +"/_metadata") for chrom in chrom_set],
-        [os.path.join(KL_data_dir, "whole_genome/spliceai/" + chrom +"/_metadata") for chrom in chrom_set],
-        [os.path.join(scratch_dir, "whole_genome/closest_tss/" + chrom +"/_metadata") for chrom in chrom_set],
+        input_list
 
-
-########################################## from mut model to tsv file#######################################################
+################################################### add allele count info ####################################################
+        
 # rule unzip_vova_model:
 #     input:
 #         os.path.join(pd_data_dir, "vova_model/{chrom}_rate_v5.2_TFBS_correction.gz")
@@ -69,196 +63,386 @@ rule all:
 #         os.path.join(scratch_dir, "vova_model/{chrom}_rate_v5.2_TFBS_correction")
 #     resources:
 #         partition="short",
-#         runtime="0-12:00",
-#         cpus_per_task=5,
-#         mem_mb=get_mem_mb
+#         runtime="0-1:00",
+#         cpus_per_task=1,
+#         mem_mb=get_mem_mb_small
+#     shell:
+#         "gunzip -c {input} > {output}"
+                
+rule filter_low_quality_files:
+    input:
+        os.path.join(scratch_dir, "vova_model/{chrom}_rate_v5.2_TFBS_correction")
+    output:
+        os.path.join(KL_data_dir, "whole_genome/mu_filtered/{chrom}/_metadata")
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=20000
+    run:
+        from dask.distributed import Client
+
+        with Client() as client:
+            header = ["Pos", "Pentamer", "mu", "mu_quality", "mu_TFBS"]
+
+            df = dd.read_csv(input[0], sep = " ", names = header)
+            
+            df_hq = df[df["mu_quality"].isin(["TFBS", "high"])]
+
+            df_hq["mu"] = df_hq["mu_TFBS"].where(df_hq["mu_TFBS"].isna() == False, df_hq["mu"])
+
+            df_hq = df_hq.drop(['mu_quality', 'mu_TFBS'], axis=1)
+
+            df_hq["Allele_ref"] = df_hq["Pentamer"].str[2]
+            df_hq["Allele"] = df_hq["Pentamer"].str[6]
+
+            df_hq = df_hq.drop(['Pentamer'], axis=1)
+            
+            df_hq = df_hq.repartition(partition_size="2GB")
+            
+            df_hq.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+            
+rule bin_mutation_rate:
+    input:
+        rate = os.path.join(KL_data_dir, "whole_genome/mu_filtered/{chrom}/_metadata"),
+        index = os.path.join(KL_data_dir, "whole_genome/mu_index.tsv")
+    output:
+        os.path.join(scratch_dir, "whole_genome/new_rate_bin/{chrom}/_metadata"),
+    resources:
+        partition="short",
+        runtime="0-10:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+            
+            # first, bin some mutation rates
+            def bin_mutation_rate(mu):
+                if mu < 0.4:
+                    if mu == 0.004:
+                        return 0.013
+                    if mu == 0.12:
+                        return 0.117
+                    if mu == 0.130:
+                        return 0.128
+                    if mu == 0.23:
+                        return 0.236
+                    if mu == 0.35:
+                        return 0.357
+                    return mu
+                else:
+                    if mu < 0.6:
+                        return 0.5
+                    elif mu < 0.8:
+                        return 0.7
+                    elif mu < 1.2:
+                        return 1.0
+                    elif mu < 1.6:
+                        return 1.4
+                    elif mu > 3.5:
+                        return 3.55
+                    else:
+                        return mu
+            
+#             rate["mu"].replace(".", None)
+            
+            rate["mu"] = rate.apply(lambda row: bin_mutation_rate(row["mu"]), axis=1)
+            
+            sfs = pd.read_csv(input.index, sep = "\t")
+            res = dict(zip(sfs["mu"], sfs.index))
+            
+            def get_index(mu):
+                try:
+                    return res[mu]
+                except:
+                    return -1
+            
+            rate["mu_index"] = rate.apply(lambda row: get_index(row["mu"]), axis=1)
+            
+#             rate["index"] = rate["Pos"].astype(str) + "_" + rate["Allele_ref"] + "_" + rate["Allele"]
+#             rate["index"] = rate["index"].astype(object)
+            
+#             rate = rate.dropna(subset=['index'])
+            
+#             rate = rate.set_index("index")
+
+            rate = rate.repartition(partition_size="3GB")
+            
+            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+            
+            
+            
+################################################### add allele count info ####################################################
+## add gnomAD info
+
+## coverage information
+            
+# rule download_gnomad_v3_cov:
+#     input:
+#     output:
+#         os.path.join(scratch_dir, "downloads/gnomad.genomes.r3.0.1.coverage.summary.tsv.bgz")
+#     resources:
+#         partition="short",
+#         runtime="0-10:00",
+#         cpus_per_task=1,
+#         mem_mb=2000
+#     shell:
+#         "wget -P /n/scratch3/users/d/djl34/downloads/ https://storage.googleapis.com/gcp-public-data--gnomad/release/3.0.1/coverage/genomes/gnomad.genomes.r3.0.1.coverage.summary.tsv.bgz"
+
+# rule unzip_gnomad_v3_cov:
+#     input:
+#         os.path.join(scratch_dir, "downloads/gnomad.genomes.r3.0.1.coverage.summary.tsv.bgz")
+#     output:
+#         os.path.join(scratch_dir, "downloads/gnomad.genomes.r3.0.1.coverage.summary.tsv")
+#     resources:
+#         partition="short",
+#         runtime="0-10:00",
+#         cpus_per_task=1,
+#         mem_mb=2000
 #     shell:
 #         "gunzip -c {input} > {output}"
         
-# rule filter_low_quality_files:
-#     input:
-#         os.path.join(scratch_dir, "vova_model/{chrom}_rate_v5.2_TFBS_correction")
-#     output:
-#         os.path.join(KL_data_dir, "whole_genome/mu_filtered/{chrom}/_metadata")
-#     resources:
-#         partition="short",
-#         runtime="0-12:00",
-#         cpus_per_task=5,
-#         mem_mb=get_mem_mb
-#     run:
-#         from dask.distributed import Client
+        
+rule gnomad_v3_cov_split_by_chrom:
+    input:
+        os.path.join(scratch_dir, "downloads/gnomad.genomes.r3.0.1.coverage.summary.tsv")
+    output:
+        os.path.join(pd_data_dir, "gnomadv3.1.2/cov/{chrom}/_metadata")
+    resources:
+        partition="short",
+        runtime="0-10:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            df = dd.read_csv(input[0], sep = "\t")
+            df["Chrom"] = df["locus"].str.split(":", expand = True, n = 1)[0]
+            df["Pos"] = df["locus"].str.split(":", expand = True, n = 1)[1]
 
-#         with Client() as client:
-#             header = ["Pos", "Pentamer", "mu", "mu_quality", "mu_TFBS"]
-
-#             df = dd.read_csv(input[0], sep = " ", names = header)
+#             df["Chrom"] = df["Chrom"].astype(int)
+            df["Pos"] = df["Pos"].astype(int)
             
-#             df_hq = df[df["mu_quality"].isin(["TFBS", "high"])]
-
-#             df_hq["mu"] = df_hq["mu_TFBS"].where(df_hq["mu_TFBS"].isna() == False, df_hq["mu"])
-
-#             df_hq = df_hq.drop(['mu_quality', 'mu_TFBS'], axis=1)
-
-#             df_hq["Allele_ref"] = df_hq["Pentamer"].str[2]
-#             df_hq["Allele"] = df_hq["Pentamer"].str[6]
-
-#             df_hq = df_hq.drop(['Pentamer'], axis=1)
+            df = df[df["Chrom"] == "chr" + wildcards.chrom]
             
-#             df_hq = df_hq.repartition(partition_size="2GB")
+            df["Pos"] = dd.to_numeric(df['Pos'], errors='coerce').fillna(0).astype(int)
             
-#             df_hq.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+            df = df[["Chrom", "Pos", "mean", "median_approx"]]
             
-
+            df = df.repartition(partition_size="1GB")
             
-#################################################### add allele count info ####################################################
-### add gnomAD info
+            df.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
 
-# rule add_gnomAD_v3_AC:
-#     input:
-#         os.path.join(KL_data_dir, "whole_genome/mu_filtered/{chrom}/_metadata"),
-#         os.path.join(pd_data_dir, "gnomadv3.1.2/AC/{chrom}/_metadata")
-# #         os.path.join(pd_data_dir, "gnomadv3/AC/{chrom}/_metadata")
-#     output:
-#         os.path.join(KL_data_dir, "whole_genome/gnomad_ac/{chrom}/_metadata"),
-#     resources:
-#         partition="short",
-#         runtime="0-12:00",
-#         cpus_per_task=5,
-#         mem_mb=get_mem_mb
-#     run:
-#         from dask.distributed import Client
-
-#         with Client() as client:
-#             rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
-#             gnomad = dd.read_parquet("/".join(input[1].split("/")[:-1]) + "/")
+rule add_gnomAD_v3_coverage:
+    input:
+        os.path.join(scratch_dir, "whole_genome/new_rate_bin/{chrom}/_metadata"),
+        os.path.join(pd_data_dir, "gnomadv3.1.2/cov/{chrom}/_metadata")
+    output:
+        os.path.join(scratch_dir, "whole_genome/gnomad_cov/{chrom}/_metadata"),
+    resources:
+        partition="short",
+        runtime="0-10:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
             
-#             gnomad = gnomad.rename(columns={"Filter": "filter_gnomADv3", "AC": "AC_gnomADv3", "AN": "AN_gnomADv3", "AF": "AF_gnomADv3"})
+            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+#             rate["AN_ukb_ffill"] = rate["AN_ukb_ffill"].astype('Int64')
+#             rate["AN_ukb_bfill"] = rate["AN_ukb_bfill"].astype('Int64')
+#             rate["AN_gnomADv3_bfill"] = rate["AN_gnomADv3_bfill"].astype('Int64')
+#             rate["AN_gnomADv3_ffill"] = rate["AN_gnomADv3_ffill"].astype('Int64')
+            
+            gnomad = dd.read_parquet("/".join(input[1].split("/")[:-1]) + "/")
+            gnomad = gnomad.rename(columns={"mean": "cov_mean_gnomADv3", "median_approx": "cov_median_gnomADv3"})
+#             gnomad["Pos"] = gnomad["Pos"].astype('Int64')
+            
+            rate = rate.merge(gnomad[["Pos", "cov_median_gnomADv3"]], on = ["Pos"], how = "left")
+            
+            rate = rate[(rate["cov_median_gnomADv3"] > 25) & (rate["cov_median_gnomADv3"] < 35)] 
+            
+            rate = rate.drop(columns=['cov_median_gnomADv3'])
 
-#             rate = rate.merge(gnomad[["Pos", "Allele_ref", "Allele", "filter_gnomADv3", "AC_gnomADv3", "AN_gnomADv3", "AF_gnomADv3"]], on = ["Pos", "Allele_ref", "Allele"], how = "left")
+            rate = rate.repartition(partition_size="3GB")
+            
+            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = True, compression = "gzip", write_metadata_file = True)
+
+rule add_gnomAD_v3_AC:
+    input:
+        os.path.join(scratch_dir, "whole_genome/gnomad_cov/{chrom}/_metadata"),
+        os.path.join(pd_data_dir, "gnomadv3.1.2/AC/{chrom}/_metadata")
+#         os.path.join(pd_data_dir, "gnomadv3/AC/{chrom}/_metadata")
+    output:
+        os.path.join(KL_data_dir, "whole_genome/gnomad_ac/{chrom}/_metadata"),
+    resources:
+        partition="short",
+        runtime="0-10:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        from dask.distributed import Client
+
+        with Client() as client:
+            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+            gnomad = dd.read_parquet("/".join(input[1].split("/")[:-1]) + "/")
+            
+            gnomad = gnomad.rename(columns={"Filter": "filter_gnomADv3", "AC": "AC_gnomADv3", "AN": "AN_gnomADv3"})
+            
+#             gnomad["index"] = gnomad["Pos"].astype(str) + "_" + gnomad["Allele_ref"] + "_" + gnomad["Allele"]
+#             gnomad["index"] = gnomad["index"].astype(object)
+#             gnomad = gnomad.dropna(subset=['index'])
+#             gnomad = gnomad.set_index("index")
             
 #             include_filter = ["PASS", "AC0"]
             
-#             rate = rate[(rate["filter_gnomADv3"].isin(include_filter)) | (rate["filter_gnomADv3"].isna())]
+            rate = rate.merge(gnomad[["Pos", "Allele_ref", "Allele", "filter_gnomADv3", "AC_gnomADv3", "AN_gnomADv3"]], how = "left", on = ["Pos", "Allele_ref", "Allele"])
             
-#             rate["AF_gnomADv3"] = rate["AF_gnomADv3"].fillna(0)
-#             rate["AF_gnomADv3"] = rate["AF_gnomADv3"].replace(".", 0)
-#             rate["AF_gnomADv3"] = rate["AF_gnomADv3"].astype(float)
+            rate = rate.dropna(subset=['Pos', 'Allele_ref', 'Allele'])
             
-#             rate = rate.repartition(partition_size="3GB")
+            rate["Pos"] = dd.to_numeric(rate['Pos'], errors='coerce').fillna(0).astype('Int64')
+            
+            rate = rate.repartition(partition_size="3GB")
 
-#             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
-
-# rule add_gnomAD_v3_coverage:
-#     input:
-#         os.path.join(scratch_dir, "whole_genome/gnomad_ac/{chrom}/_metadata"),
-#         os.path.join(pd_data_dir, "gnomadv3.1.2/gnomad.genomes.r3.0.1.coverage.summary.chr{chrom}.tsv")
-# #         os.path.join(pd_data_dir, "gnomadv3/coverage/{chrom}.tsv")
-#     output:
-#         os.path.join(scratch_dir, "whole_genome/gnomad_cov/{chrom}/_metadata"),
-#     run:
-#         with Client() as client:
+            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
             
-#             rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
-#             gnomad = dd.read_csv(input[1], sep = "\t")
-#             gnomad = gnomad.rename(columns={"mean": "cov_mean_gnomADv3", "median_approx": "cov_median_gnomADv3"})
-            
-#             rate = rate.merge(gnomad[["Pos", "cov_median_gnomADv3"]], on = ["Pos"], how = "left")
-            
-#             rate = rate[(rate["cov_median_gnomADv3"] > 25) & (rate["cov_median_gnomADv3"] < 35)] 
-
-#             rate = rate.repartition(partition_size="3GB")
-            
-#             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
-            
-# we won't add UKBiobank for now b/c we don't have coverage information
-# rule add_ukb_AC:
-#     input:
-#         os.path.join(KL_data_dir, "bin/{chrom}/_metadata"),
-#         os.path.join(pd_data_dir, "ukbiobank/split/chr{chrom}.tsv")
-#     output:
-#         os.path.join(scratch_dir, "whole_genome/ukb_ac/{chrom}/_metadata"),
-#     run:
-#         from dask.distributed import Client
-
-#         with Client() as client:
-#             rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/part.*.parquet")
-#             ukb = dd.read_csv(input[1], sep = "\t", dtype={'filter': 'object'})
-            
-#             if int(wildcards.chrom) == 19:
-#                 partition = 40
-#                 rate = rate.repartition(npartitions= partition)  
-#             if int(wildcards.chrom) == 13:
-#                 partition = 80
-#                 rate = rate.repartition(npartitions= partition)  
-            
-#             ukb = ukb.rename(columns = {"filter": "filter_ukb", "AN": "AN_ukb", "AC": "AC_ukb"})
-
-#             rate = rate.merge(ukb[["Pos", "Allele_ref", "Allele", "filter_ukb", "AC_ukb", "AN_ukb"]], on = ["Pos", "Allele_ref", "Allele"], how = "left")
-
-#             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
-
-###################################################### bin mutation rate #######################################################
-# bin mutation rate b/c some bins are too small
-
-
-# rule bin_mutation_rate:
-#     input:
-#         os.path.join(scratch_dir, "whole_genome/gnomad_cov/{chrom}/_metadata"),
-#     output:
-#         os.path.join(KL_data_dir, "whole_genome/new_rate_bin/{chrom}/_metadata"),
-#     run:
-#         with Client() as client:
-#             rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
-            
-#             def bin_mutation_rate(mu):
-#                 if mu < 0.4:
-#                     if mu == 0.004:
-#                         return 0.013
-#                     if mu == 0.12:
-#                         return 0.117
-#                     if mu == 0.130:
-#                         return 0.128
-#                     if mu == 0.23:
-#                         return 0.236
-#                     return mu
-#                 else:
-#                     if mu < 0.6:
-#                         return 0.5
-#                     elif mu < 0.8:
-#                         return 0.7
-#                     elif mu < 1.2:
-#                         return 1.0
-#                     elif mu < 1.6:
-#                         return 1.4
-#                     elif mu > 3.5:
-#                         return 3.55
-#                     else:
-#                         return mu
-            
-#             rate["mu"] = rate["mu"].astype(float)
-#             rate["mu_newbin"] = rate.apply(lambda row: bin_mutation_rate(row["mu"]), axis=1)
-            
-#             rate = rate.repartition(partition_size="3GB")
-            
-#             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
-
-####################################################### add region #######################################################
-# mark which regions are neutral
-rule filter_by_neutral_region:
+rule add_ukb_AC:
     input:
-        os.path.join(KL_data_dir, "whole_genome/new_rate_bin/{chrom}/_metadata"),
+        os.path.join(scratch_dir, "whole_genome/gnomad_ac/{chrom}/_metadata"),
+        os.path.join(pd_data_dir, "ukbiobank/split/chr{chrom}.tsv")
     output:
-        os.path.join(scratch_dir, "whole_genome/neutral/{chrom}/_metadata"),
+        os.path.join(scratch_dir, "whole_genome/ukb_ac/{chrom}/_metadata"),
     resources:
         partition="short",
-        runtime="0-12:00",
+        runtime="0-10:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        from dask.distributed import Client
+
+        with Client() as client:
+            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+            ukb = dd.read_csv(input[1], sep = "\t", dtype={'filter': 'object'})  
+            
+            ukb = ukb.rename(columns = {"filter": "filter_ukb", "AN": "AN_ukb", "AC": "AC_ukb"})
+            
+            ukb["Pos"] = dd.to_numeric(ukb['Pos'], errors='coerce').fillna(0).astype('Int64')
+            
+            rate = rate.merge(ukb[["Pos", "Allele_ref", "Allele", "filter_ukb", "AC_ukb", "AN_ukb"]], on = ["Pos", "Allele_ref", "Allele"], how = "left")
+            
+#             include_filter = ["PASS"]
+            
+#             rate = rate[(rate["filter_ukb"].isin(include_filter)) | (rate["filter_ukb"].isna())]
+            
+            rate = rate.repartition(partition_size="3GB")
+            
+            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+
+            
+rule set_index:
+    input:
+        os.path.join(scratch_dir, "whole_genome/ukb_ac/{chrom}/_metadata"),
+    output:
+        os.path.join(scratch_dir, "whole_genome/set_index/{chrom}/_metadata"),
+    resources:
+        partition="short",
+        runtime="0-10:00",
         cpus_per_task=5,
         mem_mb=get_mem_mb
     run:
         with Client() as client:
             rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
             
-            df = pd.read_csv(pd_data_dir + "/NRE/NRE_result_all.tsv", sep = "\t")
+            rate["index"] = rate["Pos"].astype(str) + "_" + rate["Allele_ref"] + "_" + rate["Allele"]
+            rate["index"] = rate["index"].astype(object)
+
+            rate = rate.dropna(subset=['index'])
+
+            rate = rate.set_index("index")
+            
+            rate = rate.repartition(partition_size="3GB")
+
+            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = True, compression = "gzip", write_metadata_file = True)
+            
+rule interpolate_AN:
+    input:
+        rate = os.path.join(scratch_dir, "whole_genome/set_index/{chrom}/_metadata"),
+    output:
+        os.path.join(scratch_dir, "whole_genome/AN_interpolate/{chrom}/_metadata"),
+    resources:
+        partition="short",
+        runtime="0-2:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            rate = dd.read_parquet("/".join(input.rate.split("/")[:-1]) + "/")
+            
+            #forward and backfille for AN
+            rate["AN_gnomADv3_ffill"] = rate["AN_gnomADv3"].fillna(method = "ffill").astype('Int64')
+            rate["AN_gnomADv3_bfill"] = rate["AN_gnomADv3"].fillna(method = "bfill").astype('Int64')
+            rate['AN_gnomADv3_interpolate'] = rate[['AN_gnomADv3_bfill', 'AN_gnomADv3_ffill']].mean(axis=1)
+            
+            #forward and backfille for AN
+            rate["AN_ukb_ffill"] = rate["AN_ukb"].fillna(method = "ffill").astype('Int64')
+            rate["AN_ukb_bfill"] = rate["AN_ukb"].fillna(method = "bfill").astype('Int64')
+            rate['AN_ukb_interpolate'] = rate[['AN_ukb_bfill', 'AN_ukb_ffill']].mean(axis=1)
+            
+            rate["AN_total_interpolate"] = rate['AN_gnomADv3_interpolate'] + rate['AN_ukb_interpolate']
+            rate["AC_total"] = rate["AC_ukb"].fillna(0) + rate["AC_gnomADv3"].fillna(0)
+            
+            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = True, compression = "gzip", write_metadata_file = True)
+            
+rule filter_sites:
+    input:
+        os.path.join(scratch_dir, "whole_genome/AN_interpolate/{chrom}/_metadata"),
+    output:
+        os.path.join(KL_data_dir, "whole_genome/filtered/{chrom}/_metadata"),
+    resources:
+        partition="short",
+        runtime="0-2:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+            
+            rate = rate.drop(columns=['AN_gnomADv3_ffill', 'AN_gnomADv3_bfill', 'AN_gnomADv3_interpolate', 'AN_ukb_interpolate', 'AN_ukb_ffill', 'AN_ukb_bfill'])
+            
+            include_filter = ["PASS", "AC0"]
+            rate = rate[(rate["filter_gnomADv3"].isin(include_filter)) | (rate["filter_gnomADv3"].isna())]
+            
+            
+            include_filter = ["PASS"]            
+            rate = rate[(rate["filter_ukb"].isin(include_filter)) | (rate["filter_ukb"].isna())]
+            
+            rate = rate.drop(columns=['filter_ukb', 'filter_gnomADv3', 'AN_gnomADv3', 'AN_ukb', 'AC_ukb', 'AC_gnomADv3'])
+
+            rate = rate.repartition(partition_size="3GB")
+            
+            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = True, compression = "gzip", write_metadata_file = True)
+
+
+##################################################### add neutral region ####################################################
+# mark which regions are neutral
+rule filter_by_neutral_region:
+    input:
+        rate = os.path.join(KL_data_dir, "whole_genome/filtered/{chrom}/_metadata"),
+        neutral = pd_data_dir + "/NRE/NRE_result_all.tsv"
+    output:
+        os.path.join(scratch_dir, "whole_genome/neutral/{chrom}/_metadata"),
+    resources:
+        partition="short",
+        runtime="0-2:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            rate = dd.read_parquet("/".join(input.rate.split("/")[:-1]) + "/")
+            
+            df = pd.read_csv(input.neutral, sep = "\t")
             df = df[df["chrom"] == "chr" + str(wildcards.chrom)]
             df = df[["chromStart", "chromEnd"]]
             
@@ -293,6 +477,9 @@ rule get_minor_allele_freq:
         with Client() as client:
             rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
             
+            rate["AN_total_interpolate"] = rate['AN_gnomADv3_interpolate'] + rate['AN_ukb_interpolate']
+            rate["AC_total"]
+            
             rate["AF"] = rate["AF_gnomADv3"]
             rate["1-AF"] = 1 - rate["AF"]
             rate["MAF"] = rate[["AF", "1-AF"]].min(axis=1)
@@ -301,6 +488,114 @@ rule get_minor_allele_freq:
             rate = rate.repartition(partition_size="3GB")
             
             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+            
+####################################################### make AF bins #######################################################
+
+# freq_breaks_9 = [-1, 1e-8, 2e-06, 4.0e-06, 8.0e-06, 1.6e-05, 5e-05, 5e-04, 5e-03, 0.5] 
+# freq_breaks_10 = [-1, 1e-8, 1e-06, 1.5e-06, 3.0e-06, 1e-05, 5e-05, 5e-04, 5e-03, 5e-02, 0.5] 
+
+# freq_breaks_9 = [-1, 1e-8, 1e-05, 1.7e-05, 2.3e-05, 3.6e-05, 8e-05, 5e-04, 5e-03, 0.5] 
+
+
+rule make_adaptive_bins:
+    input:
+        os.path.join(scratch_dir, "whole_genome/neutral/{chrom}/_metadata"),
+    output:
+        os.path.join(KL_data_dir, "whole_genome/freq_bins/{chrom}/_metadata"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=1,
+        mem_mb=5000
+    run:
+        with Client() as client:
+            
+            freq_breaks_9 = [-1, 1e-8, 2e-06, 4.0e-06, 8.0e-06, 1.6e-05, 5e-05, 5e-04, 5e-03, 0.5] 
+            freq_breaks_10 = [-1, 1e-8, 2e-06, 4.0e-06, 8.0e-06, 1.6e-05, 5e-05, 5e-04, 5e-03, 5e-02, 0.5] 
+            
+            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+            
+            rate["Freq_bin_9"] = rate['MAF'].map_partitions(pd.cut, freq_breaks_9, labels = False)
+            rate["Freq_bin_10"] = rate['MAF'].map_partitions(pd.cut, freq_breaks_10, labels = False)
+            
+            rate = rate.repartition(partition_size="3GB")
+
+            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+            
+            
+rule make_SFS_neutral:
+    input:
+        os.path.join(KL_data_dir, "whole_exome/freq_bins/{chrom}/_metadata"),
+    output:
+#         os.path.join(scratch_dir, "whole_exome/freq_bins/freq_bin_10_{chrom}.tsv"),
+        os.path.join(scratch_dir, "whole_exome/freq_bins/freq_bin_9_{chrom}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=1,
+        mem_mb=4000
+    run:
+        with Client() as client:
+                        
+            bin_list = ["Freq_bin_9"]
+            
+            i = 0
+            for x in bin_list:
+                
+                df = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+            
+                df = df[["mu", x, "neutral"]]
+                df = df[df["neutral"] == 1]
+                df = df.compute()
+
+                df_group = pd.DataFrame(df.groupby(["mu", x])[x].count())
+
+                df_group = df_group.rename({x: "count"}, axis = 1)
+
+                df_group = df_group.reset_index()
+
+                df_group["count"] = df_group["count"].astype(int)
+
+                df_group_pivot = df_group.pivot(index='mu', columns=x, values='count')
+
+                df_group_pivot = df_group_pivot.reset_index()
+
+                df_group_pivot.to_csv(output[i], sep = "\t", index = None)
+                i += 1
+                            
+rule combine_9_SFS_neutral:
+    input:
+        files = [os.path.join(scratch_dir, "whole_exome/freq_bins/freq_bin_9_" + chrom + ".tsv") for chrom in all_chrom_set]
+    output:
+        os.path.join(KL_data_dir, "whole_exome/freq_bins/freq_bin_9_all.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            df = dd.read_csv(input.files, sep = "\t", dtype={'0.0': 'float64',
+                           '1.0': 'float64', '2.0': 'float64', '3.0': 'float64',
+                           '4.0': 'float64', '5.0': 'float64', '6.0': 'float64',
+                           '7.0': 'float64', '8.0': 'float64'})
+    
+            df = df.compute()
+            
+            df_group = df.groupby("mu")['0.0', '1.0', '2.0','3.0','4.0','5.0','6.0','7.0','8.0'].sum().reset_index()
+            
+            df_group = df_group.set_index('mu')
+            sum_list = df_group.sum(axis = 1)
+            df_group = df_group.div(df_group.sum(axis=1), axis=0)
+            df_group["sum"] = sum_list
+            df_group = df_group.reset_index()
+            
+            df_group.to_csv(output[0], sep = "\t", index = None)
+            
+###############################################################################
+            
+
             
 rule get_only_neutral_sites:
     input:
@@ -422,36 +717,7 @@ rule make_windows_zscore:
             rate = rate.repartition(partition_size="3GB")
             
             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
-            
-# rule add_enhancer_module:
-#     input:
-#         os.path.join(scratch_dir, "whole_genome/windows_zscore/{chrom}/_metadata"),
-#     output:
-#         os.path.join(KL_data_dir, "whole_genome/enhancer/{chrom}/_metadata"),
-#     run:
-#         with Client() as client:
-            
-#             rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
-            
-#             df = pd.read_csv(KL_data_dir + "/epimap/epimap_enhancer_module.bed", sep = "\t", 
-#                              names = ["Chrom", "start", "end", "e_module"])
-            
-#             df_chr = df[df["Chrom"] == "chr" + wildcards.chrom]
-            
-#             def get_range(start, end):
-#                 return range(start, end + 1)
-
-#             df_chr["Pos"] = df_chr.apply(lambda row: get_range(row["start"],row["end"]), axis=1)
-#             df_chr = df_chr.explode('Pos')
-#             df_chr["Pos"] = df_chr["Pos"].astype(int)
-#             df_chr = df_chr.drop(["start", "end", "Chrom"], axis = 1)
-            
-#             rate = rate.merge(df_chr, on = "Pos", how = "left")
-            
-#             rate = rate.repartition(partition_size="4GB")
-            
-#             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
-            
+                        
 # mark which regions are exonic
 rule add_exonic_regions:
     input:
@@ -488,6 +754,41 @@ rule add_exonic_regions:
             rate = rate.repartition(partition_size="3GB")
             
             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+            
+rule add_enhancer_module:
+    input:
+        os.path.join(scratch_dir, "whole_genome/nonsense/{chrom}/_metadata"),
+    output:
+        os.path.join(KL_data_dir, "whole_genome/enhancer/{chrom}/_metadata"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+            
+            df = pd.read_csv(KL_data_dir + "/epimap/epimap_enhancer_module.bed", sep = "\t", 
+                             names = ["Chrom", "start", "end", "e_module"])
+            
+            df_chr = df[df["Chrom"] == "chr" + wildcards.chrom]
+            
+            def get_range(start, end):
+                return range(start, end + 1)
+
+            df_chr["Pos"] = df_chr.apply(lambda row: get_range(row["start"],row["end"]), axis=1)
+            df_chr = df_chr.explode('Pos')
+            df_chr["Pos"] = df_chr["Pos"].astype(int)
+            df_chr = df_chr.drop(["start", "end", "Chrom"], axis = 1)
+            
+            rate = rate.merge(df_chr, on = "Pos", how = "left")
+            
+            rate = rate.repartition(partition_size="4GB")
+            
+            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+            
 ####################################################### add features #######################################################
 ###zoonomia phyloP
 
@@ -667,7 +968,6 @@ rule split_info_column:
         cpus_per_task=5,
         mem_mb=get_mem_mb
     run:
-#         "bcftools +split-vep {input} -f '%CHROM %POS %REF %ALT %CSQ\n' -d -A tab -o {output}"
         with Client() as client:
             names = ["CHROM", "POS", "ID","REF", "ALT", "QUAL", "FILTER", "INFO"]
             ddf = dd.read_csv(input.vcf, sep = "\t", comment = "#", names = names, dtype={'CHROM': 'object'})
@@ -822,11 +1122,17 @@ rule get_closest_TSS:
             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
 
 
-rule add_KL_pergene:
+rule add_nonsense_mutations:
     input:
         os.path.join(scratch_dir, "whole_genome/closest_tss/{chrom}/_metadata"),
+        "/home/djl34/lab_pd/aso/data/fake_transcript_variants_v4_lof_HC_filtered_unint.tsv"        
     output:
-        os.path.join(scratch_dir, "whole_genome/kl_pergene/{chrom}/_metadata"),
+        os.path.join(scratch_dir, "whole_genome/nonsense/{chrom}/_metadata"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=30000
     run:
         from dask.distributed import Client, LocalCluster
 #         # set up cluster and workers
@@ -834,17 +1140,41 @@ rule add_KL_pergene:
 
         with Client() as client:
             
-            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/part.*.parquet")
+            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
             
-            df = pd.read_csv(KL_data_dir + "/lof_KL_pseudocount_1.tsv", sep = "\t")
+            df = pd.read_csv(input[1], sep = "\t")
 
-            df = df[["Gene", "KL"]]
-
-            df = df.rename({"Gene": "TSS_Gene", "KL": "TSS_KL"}, axis = 1)
+            df = df[["Chrom", "Pos", "Allele", "Gene", "Consequence"]]
             
-            rate = rate.merge(df, on = ["TSS_Gene"], how = "left")
+            df["Chrom"] = df["Chrom"].astype(str)
+            
+            df = df[df["Chrom"] == wildcards.chrom]
+
+            df = df.rename({"Gene": "Nonsense_Gene", "Consequence": "Nonsense_Consequence"}, axis = 1)
+            
+            rate = rate.merge(df, on = ["Pos", "Allele"], how = "left")
 
             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+            
+# rule add_KL_pergene:
+#     input:
+#         os.path.join(scratch_dir, "whole_genome/closest_tss/{chrom}/_metadata"),
+#     output:
+#         os.path.join(scratch_dir, "whole_genome/kl_pergene/{chrom}/_metadata"),
+#     run:
+#         with Client() as client:
+            
+#             rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/part.*.parquet")
+            
+#             df = pd.read_csv(KL_data_dir + "/lof_KL_pseudocount_1.tsv", sep = "\t")
+
+#             df = df[["Gene", "KL"]]
+
+#             df = df.rename({"Gene": "TSS_Gene", "KL": "TSS_KL"}, axis = 1)
+            
+#             rate = rate.merge(df, on = ["TSS_Gene"], how = "left")
+
+#             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
 
 ############################################## bin by allele frequency ##############################################
             
@@ -874,28 +1204,28 @@ rule make_5bins:
             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
             
 
-freq_breaks_adaptive_bins = [-1, 1e-8, 1e-05, 1.7e-05, 2.3e-05, 3.6e-05, 8e-05, 5e-04, 5e-03, 5e-02, 0.5] 
+# freq_breaks_adaptive_bins = [-1, 1e-8, 1e-05, 1.7e-05, 2.3e-05, 3.6e-05, 8e-05, 5e-04, 5e-03, 5e-02, 0.5] 
 
-rule make_adaptive_bins:
-    input:
-        os.path.join(scratch_dir, "{header}/5_bins/{chrom}/_metadata"),
-    output:
-        os.path.join(scratch_dir, "{header}/adaptive_bins/{chrom}/_metadata"),
-    resources:
-        partition="short",
-        runtime="0-12:00",
-        cpus_per_task=5,
-        mem_mb=get_mem_mb
-    run:
-        with Client() as client:
+# rule make_adaptive_bins:
+#     input:
+#         os.path.join(scratch_dir, "{header}/5_bins/{chrom}/_metadata"),
+#     output:
+#         os.path.join(scratch_dir, "{header}/adaptive_bins/{chrom}/_metadata"),
+#     resources:
+#         partition="short",
+#         runtime="0-12:00",
+#         cpus_per_task=5,
+#         mem_mb=get_mem_mb
+#     run:
+#         with Client() as client:
             
-            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/part.*.parquet")
+#             rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/part.*.parquet")
             
-            rate["Freq_bin_adaptive"] = rate['MAF'].map_partitions(pd.cut, freq_breaks_adaptive_bins, labels = False)
+#             rate["Freq_bin_adaptive"] = rate['MAF'].map_partitions(pd.cut, freq_breaks_adaptive_bins, labels = False)
             
-            rate = rate.repartition(partition_size="3GB")
+#             rate = rate.repartition(partition_size="3GB")
 
-            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+#             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
             
 
 rule make_5bins_SFS_neutral:
@@ -1029,3 +1359,90 @@ rule combine_adaptive_SFS_neutral:
             
             df_group.to_csv(output[0], sep = "\t", index = None)
             
+freq_breaks_2_bins = [-1, 1e-8, 0.5]
+
+rule make_2bins:
+    input:
+        os.path.join(scratch_dir, "whole_genome/nonsense/{chrom}/_metadata"),
+    output:
+        os.path.join(scratch_dir, "whole_genome/nonsense/2_bins/{chrom}/_metadata"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/part.*.parquet")
+            
+            rate["Freq_bin_2"] = rate['MAF'].map_partitions(pd.cut, freq_breaks_2_bins, labels = False)
+            
+            rate = rate.repartition(partition_size="3GB")
+
+            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+            
+rule make_2bins_SFS_neutral:
+    input:
+        os.path.join(scratch_dir, "whole_genome/nonsense/2_bins/{chrom}/_metadata"),
+    output:
+        os.path.join(scratch_dir, "whole_genome/nonsense/2_bins/{chrom}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            df = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/part.*.parquet")
+            
+            df = df[["mu_newbin", "Freq_bin_2", "Neutral"]]
+            df = df[df["Neutral"] == 1]
+            df = df.compute()
+            
+            df["mu"] = df["mu_newbin"]
+
+            df_group = pd.DataFrame(df.groupby(["mu", "Freq_bin_2"])["Freq_bin_2"].count())
+
+            df_group = df_group.rename({"Freq_bin_2": "count"}, axis = 1)
+
+            df_group = df_group.reset_index()
+
+            df_group["count"] = df_group["count"].astype(int)
+
+            df_group_pivot = df_group.pivot(index='mu', columns='Freq_bin_2', values='count')
+            
+            df_group_pivot = df_group_pivot.reset_index()
+            
+            df_group_pivot.to_csv(output[0], sep = "\t", index = None)
+            
+rule combine_2_SFS_neutral:
+    input:
+        files = [os.path.join(scratch_dir, "whole_genome/nonsense/2_bins/" + chrom + ".tsv") for chrom in chrom_set]
+    output:
+        os.path.join(KL_data_dir, "whole_genome/neutral/2_bins/all.tsv"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            df = dd.read_csv(input.files, sep = "\t", dtype={'0.0': 'float64',
+                           '1.0': 'float64', '2.0': 'float64', '3.0': 'float64',
+                           '4.0': 'float64', '5.0': 'float64', '6.0': 'float64',
+                           '7.0': 'float64', '8.0': 'float64', '9.0': 'float64'})
+    
+            df = df.compute()
+            
+            df_group = df.groupby("mu")['0.0', '1.0'].sum().reset_index()
+            
+            df_group = df_group.set_index('mu')
+            sum_list = df_group.sum(axis = 1)
+            df_group = df_group.div(df_group.sum(axis=1), axis=0)
+            df_group["sum"] = sum_list
+            df_group = df_group.reset_index()
+            
+            df_group.to_csv(output[0], sep = "\t", index = None)
