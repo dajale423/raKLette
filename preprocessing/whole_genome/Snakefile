@@ -1,15 +1,19 @@
-## This is a snakemake to organize the dataframes for whole genomes and whole exomes
-## I am making two different dataframes for the whole genomes and all of the exomes.
+## This is a snakemake to organize the dataframes for whole genomes
+## I am making two different dataframes one will contain the features, the other will contain population sequencing data
 
 import os
 import sys
 import glob
 import numpy as np
-import pandas as pd
+
 import math
 import sys
 import random
 import pickle
+
+import pandas as pd
+import dask
+dask.config.set({'distributed.scheduler.allowed-failures': 0})
 import dask.dataframe as dd
 from dask.distributed import Client
 
@@ -32,8 +36,10 @@ print(chrom_set)
 wildcard_constraints:
     chrom="\d+"
     
+n = 3
+    
 def get_mem_mb(wildcards, attempt):
-    return 40000 + attempt * 30000
+    return 10000 + (attempt + n) * 30000
 
 def get_mem_mb_small(wildcards, attempt):
     return attempt * 10000
@@ -44,12 +50,16 @@ def get_mem_mb_small(wildcards, attempt):
 # filename_list = [os.path.join(KL_data_dir, "whole_genome/ukb_ac/{chrom}/_metadata")]
 filename_list = [os.path.join(scratch_dir, "whole_genome/ukb_ac/{chrom}/_metadata"),
                  os.path.join(scratch_dir, "whole_genome/AN_interpolate/{chrom}/_metadata"),
-                os.path.join(KL_data_dir, "whole_genome/filtered/{chrom}/_metadata")]
+                os.path.join(KL_data_dir, "whole_genome/filtered/{chrom}/_metadata"),
+                os.path.join(KL_data_dir, "whole_genome/freq_bins/{chrom}/_metadata"),
+]
 
-filename_list = [os.path.join(KL_data_dir, "whole_genome/gnomad_ac/{chrom}/_metadata")]
+filename_list = [os.path.join(KL_data_dir, "whole_genome/gnomad_ac/{chrom}/_metadata"),
+                os.path.join(KL_data_dir, "whole_genome/filtered/{chrom}/_metadata")]
+#                 os.path.join(KL_data_dir, "whole_genome/freq_bins/{chrom}/_metadata")]
 
 input_list = [filename.replace("{chrom}", str(chromosome)) for filename in filename_list for chromosome in chrom_set]
-    
+
 rule all:
     input:
         input_list
@@ -308,7 +318,7 @@ rule add_gnomAD_v3_AC:
             
 rule add_ukb_AC:
     input:
-        os.path.join(scratch_dir, "whole_genome/gnomad_ac/{chrom}/_metadata"),
+        os.path.join(KL_data_dir, "whole_genome/gnomad_ac/{chrom}/_metadata"),
         os.path.join(pd_data_dir, "ukbiobank/split/chr{chrom}.tsv")
     output:
         os.path.join(scratch_dir, "whole_genome/ukb_ac/{chrom}/_metadata"),
@@ -322,11 +332,10 @@ rule add_ukb_AC:
 
         with Client() as client:
             rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
-            ukb = dd.read_csv(input[1], sep = "\t", dtype={'filter': 'object'})  
-            
+            ukb = dd.read_csv(input[1], sep = "\t", dtype={'filter': 'object', 'Pos': 'Int64', 'AC': "Int64", 'AN': 'Int64'}) 
             ukb = ukb.rename(columns = {"filter": "filter_ukb", "AN": "AN_ukb", "AC": "AC_ukb"})
             
-            ukb["Pos"] = dd.to_numeric(ukb['Pos'], errors='coerce').fillna(0).astype('Int64')
+#             ukb["Pos"] = dd.to_numeric(ukb['Pos'], errors='coerce').fillna(0).astype('Int64')
             
             rate = rate.merge(ukb[["Pos", "Allele_ref", "Allele", "filter_ukb", "AC_ukb", "AN_ukb"]], on = ["Pos", "Allele_ref", "Allele"], how = "left")
             
@@ -451,17 +460,17 @@ rule filter_by_neutral_region:
             
             df["Pos_hg19"] = df.apply(lambda row: get_range(row["chromStart"],row["chromEnd"]), axis=1)
             df = df.explode('Pos_hg19')
-            df["Pos"] = df.apply(lambda row: genomic.get_hg38_pos(int(wildcards.chrom), row["Pos_hg19"]), axis=1)
+            df["Pos"] = df.apply(lambda row: genomic.get_hg38_pos(str(wildcards.chrom), row["Pos_hg19"]), axis=1)
             
             df = df[df["Pos"].isna() == False]
-            df["Pos"] = df["Pos"].astype(int)
+            df["Pos"] = df["Pos"].astype('Int64')
             
             df["Neutral"] = 1
             
             rate = rate.merge(df[["Pos", "Neutral"]], on = "Pos", how = "left")
             rate = rate.repartition(partition_size="3GB")
             
-            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = True, compression = "gzip", write_metadata_file = True)
             
 rule get_minor_allele_freq:
     input:
@@ -487,7 +496,7 @@ rule get_minor_allele_freq:
             rate = rate.drop(['1-AF'], axis=1)
             rate = rate.repartition(partition_size="3GB")
             
-            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = True, compression = "gzip", write_metadata_file = True)
             
 ####################################################### make AF bins #######################################################
 
@@ -520,15 +529,15 @@ rule make_adaptive_bins:
             
             rate = rate.repartition(partition_size="3GB")
 
-            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = True, compression = "gzip", write_metadata_file = True)
             
             
 rule make_SFS_neutral:
     input:
-        os.path.join(KL_data_dir, "whole_exome/freq_bins/{chrom}/_metadata"),
+        os.path.join(KL_data_dir, "whole_genome/freq_bins/{chrom}/_metadata"),
     output:
 #         os.path.join(scratch_dir, "whole_exome/freq_bins/freq_bin_10_{chrom}.tsv"),
-        os.path.join(scratch_dir, "whole_exome/freq_bins/freq_bin_9_{chrom}.tsv"),
+        os.path.join(scratch_dir, "whole_genome/freq_bins/freq_bin_9_{chrom}.tsv"),
     resources:
         partition="short",
         runtime="0-1:00",
@@ -565,9 +574,9 @@ rule make_SFS_neutral:
                             
 rule combine_9_SFS_neutral:
     input:
-        files = [os.path.join(scratch_dir, "whole_exome/freq_bins/freq_bin_9_" + chrom + ".tsv") for chrom in all_chrom_set]
+        files = [os.path.join(scratch_dir, "whole_genome/freq_bins/freq_bin_9_" + chrom + ".tsv") for chrom in all_chrom_set]
     output:
-        os.path.join(KL_data_dir, "whole_exome/freq_bins/freq_bin_9_all.tsv"),
+        os.path.join(KL_data_dir, "whole_genome/freq_bins/freq_bin_9_all.tsv"),
     resources:
         partition="short",
         runtime="0-1:00",
@@ -593,61 +602,7 @@ rule combine_9_SFS_neutral:
             
             df_group.to_csv(output[0], sep = "\t", index = None)
             
-###############################################################################
-            
-
-            
-rule get_only_neutral_sites:
-    input:
-        os.path.join(scratch_dir, "whole_genome/allele_freq/{chrom}/_metadata"),
-    output:
-        os.path.join(KL_data_dir, "whole_genome/neutral_only/{chrom}/_metadata"),
-    resources:
-        partition="short",
-        runtime="0-12:00",
-        cpus_per_task=5,
-        mem_mb=get_mem_mb
-    run:
-        with Client() as client:
-            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
-            
-            rate = rate[rate["Neutral"] == 1]
-            rate = rate.repartition(partition_size="3GB")
-            
-            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
-            
-            
-# change mu to index 
-rule add_mu_index:
-    input:
-        os.path.join(scratch_dir, "whole_genome/allele_freq/adaptive_bins/{chrom}/_metadata"),
-        os.path.join(KL_data_dir, "whole_genome/allele_freq/adaptive_bins/all.tsv")
-    output:
-        os.path.join(KL_data_dir, "whole_genome/mu_index/{chrom}/_metadata"),
-    resources:
-        partition="short",
-        runtime="0-12:00",
-        cpus_per_task=5,
-        mem_mb=get_mem_mb
-    run:
-        with Client() as client:
-            
-            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
-            
-            sfs = pd.read_csv(input[1], sep = "\t")
-            res = dict(zip(sfs["mu"], sfs.index))
-            
-            def get_index(mu):
-                try:
-                    return res[mu]
-                except:
-                    return -1
-            
-            rate["mu_index"] = rate.apply(lambda row: get_index(row["mu_newbin"]), axis=1)
-            
-            rate = rate.repartition(partition_size="3GB")
-            
-            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+#############################################################################################################################
 
 rule make_windows:
     input:
