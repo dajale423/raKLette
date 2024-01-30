@@ -115,6 +115,34 @@ class WinSFS:
                       np.cumsum(np.exp(self.beta_0 - beta)[:,::-1], 1)[:,::-1] / 
                       (1 + ZZ[:, None]), 0)
         return -gradient
+    
+    def ll_expected(self, YY_samp=None):
+        """
+        Compute the expected log-likelihood of the observed polymorphism data given
+        the given offset from neutral expectation.
+        
+        Parameters
+        ----------
+        
+        Returns
+        -------
+        loglik : float
+            The log-likelihood of the observed polymorphism data.
+        """
+        if YY_samp is None:
+            YY_samp = self.YY
+            nn_samp = self.nn
+        else:
+            assert YY_samp.shape == self.YY.shape
+            nn_samp = np.sum(YY_samp, axis=1)
+        
+        # convert alpha to multinomial coefficients
+        beta = self.beta_0
+        ZZ = np.sum(np.exp(self.beta_0 - beta), 1)
+        loglik = np.sum(-nn_samp * np.log1p(ZZ) + np.sum((self.beta_0 - beta) * YY_samp[:, 1:], 1))
+        # return the log-likelihood
+        
+        return -loglik/np.sum(nn_samp)
 
     def ml_optim(self, jac=False, beta_max=100, verbose=True):
         """
