@@ -64,6 +64,10 @@ input_list = [filename.replace("{chrom}", str(chromosome)) for filename in filen
 rule all:
     input:
         input_list,
+        os.path.join(scratch_dir, "results/method_validation/split/neutral/T_A.tsv"),
+        os.path.join(scratch_dir, "results/method_validation/split/footprints/T_A.tsv"),
+        os.path.join(scratch_dir, "results/method_validation/split/non_footprint_dhs/T_A.tsv"),
+
         os.path.join(KL_data_dir, "results/method_validation/split/neutral/pivot_bin_2.tsv"),
         os.path.join(KL_data_dir, "results/method_validation/split/cds/pivot_bin_2.tsv"),
         os.path.join(KL_data_dir, "results/method_validation/split/footprints/pivot_bin_2.tsv"),
@@ -198,6 +202,64 @@ rule make_footprints_dhs:
             rate_non_footprints_dhs[["MAF", "mu_index"]].to_csv(output[1], sep = "\t", single_file = True)
             
 ################################################# pivot to array ##################################################
+
+rule divide_by_mut_type:
+    input:
+        [os.path.join(scratch_dir, "{header}/" + chrom +".tsv") for chrom in all_chrom_set],
+    output:
+        os.path.join(scratch_dir, "{header}/T_A.tsv"),
+        os.path.join(scratch_dir, "{header}/T_G.tsv"),
+        os.path.join(scratch_dir, "{header}/T_C.tsv"),
+        os.path.join(scratch_dir, "{header}/C_G.tsv"),
+        os.path.join(scratch_dir, "{header}/C_A.tsv"),
+        os.path.join(scratch_dir, "{header}/C_T.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            def flip(base_pair):
+                if base_pair == "T":
+                    return "A"
+                if base_pair == "A":
+                    return "T"
+                if base_pair == "G":
+                    return "C"
+                if base_pair == "C":
+                    return "G"
+                else:
+                    return base_pair
+
+            def flip_mutation_type(mut_type):
+                if (mut_type[0] == "G") | (mut_type[0] == "A"):
+                    output = ""
+                    for i in mut_type:
+                        output += flip(i)
+                    return output
+                else:
+                    return mut_type
+            
+            rate = dd.read_csv(input, sep = "\t")
+            
+            rate["Allele_ref"] = rate["index"].str.split("_", n = 2, expand = True)[1]
+            rate["Allele"] = rate["index"].str.split("_", n = 2, expand = True)[2]
+
+            rate["mut_type"] = rate["Allele_ref"] + "_" + rate["Allele"]
+            
+            rate["mut_type"] = rate.apply(lambda row: flip_mutation_type(row["mut_type"]), axis=1, meta=pd.Series(dtype="string"))
+            
+            mut_type_list = ["T_A", "T_G", "T_C", "C_G", "C_A", "C_T"]
+            
+            columns_list = ['Freq_bin_2', 'Freq_bin_9', 'Freq_bin_10']
+            for i in range(6):
+                mut_type = mut_type_list[i]
+                
+                rate_mut_type = rate[rate["mut_type"] == mut_type]
+                
+                rate_mut_type.to_csv(output[i], single_file = True, sep = "\t", index = None) 
+
 rule pivot:
     input:
         [os.path.join(scratch_dir, "{header}/" + chrom +".tsv") for chrom in all_chrom_set],
