@@ -1,62 +1,28 @@
-## This is a snakemake to organize the dataframes for whole genomes
-## I am making two different dataframes one will contain the features, the other will contain population sequencing data
-
-import os
 import sys
-import glob
-import numpy as np
+sys.path.insert(0,'/home/djl34/kl_git/scripts')
+from snakefile_imports import *
 
-import math
-import sys
-import random
-import pickle
-
-import pandas as pd
-import dask
-dask.config.set({'distributed.scheduler.allowed-failures': 0})
-import dask.dataframe as dd
-from dask.distributed import Client
-
-sys.path.insert(0,'/home/djl34/lab_pd/bin')
-import genomic
-
-vep = "/home/djl34/bin/ensembl-vep/vep"
-
-pd_data_dir = "/home/djl34/lab_pd/data"
-KL_data_dir = "/home/djl34/lab_pd/kl/data"
-scratch_dir = "/n/scratch/users/d/djl34/"
-
-base_set = ["A", "C", "T", "G"]
-all_chrom_set = [str(x) for x in range(1, 23)]
-chrom_set = all_chrom_set
-# chrom_set.remove("2")
-# chrom_set.remove("3")
-# chrom_set = ["19"]
-
-print(chrom_set)
-
-wildcard_constraints:
-    chrom="\d+"
-    
 n = 0
-    
+
+## function for allocating memory into 
 def get_mem_mb(wildcards, attempt):
     return 10000 + (attempt + n) * 30000
-
-def get_mem_mb_small(wildcards, attempt):
-    return attempt * 10000
+    
+print(chrom_set)
 
 cwd = os.getcwd()
 file_directory = "/".join(cwd.split("/")[-2:]) + "/"
 
 # include: "/home/djl34/kl_git/preprocessing/whole_genome/Snakefile"
+# include: "/home/djl34/kl_git/results/method_validation/Snakefile"
 
 ##############################################################################################################################   
-
-mut_type_list = ["T_A", "T_C", "T_G", "C_G", "C_A", "C_T"]
-    
 ## for epigenetic features
-filename_list = [os.path.join(scratch_dir, "results/footprints/split/{chrom}.tsv")]
+filename_list = [os.path.join(scratch_dir, "results/footprints/split/{chrom}.tsv"),
+                 os.path.join(KL_data_dir, "results/footprints/mu_sum/{chrom}.tsv"),
+                 os.path.join(scratch_dir, "results/footprints/denovo/{chrom}.tsv"),
+                 os.path.join(scratch_dir, "results/footprints/zoonomia/{chrom}.tsv"),
+                 os.path.join(KL_data_dir, "results/footprints/phyloP/{chrom}.tsv"),]
 
 # filename_list = [os.path.join(scratch_dir, "results/method_validation/split/neutral/{chrom}.tsv")]
 
@@ -67,8 +33,8 @@ rule all:
         input_list,
 
 ################################################# creating data for results ##################################################
-            
-# create data for neutral sites
+
+# create data for footprints
 rule make_footprints:
     input:
         os.path.join(scratch_dir, "whole_genome/combined/footprints/{chrom}/_metadata")
@@ -95,15 +61,13 @@ rule make_footprints:
                         
             rate_footprints = rate[(rate["footprints"] == 1)]
             rate_footprints.to_csv(output[0], sep = "\t", single_file = True)
-            
-################################################# pivot to array ##################################################
-rule pivot:
+
+rule add_denovo:
     input:
-        [os.path.join(scratch_dir, "{header}/" + chrom +".tsv") for chrom in all_chrom_set],
+        rate = os.path.join(scratch_dir, "results/footprints/split/{chrom}.tsv"),
+        denovo = os.path.join(KL_data_dir, "de_novo/an_etal/aat6576_table-s2.csv")
     output:
-        os.path.join(KL_data_dir, "{header}/pivot_bin_2.tsv"),
-        os.path.join(KL_data_dir, "{header}/pivot_bin_9.tsv"),
-        os.path.join(KL_data_dir, "{header}/pivot_bin_10.tsv"),
+        os.path.join(scratch_dir, "results/footprints/denovo/{chrom}.tsv")
     resources:
         partition="short",
         runtime="0-1:00",
@@ -112,90 +76,64 @@ rule pivot:
     run:
         with Client() as client:
             
-            rate = dd.read_csv(input, sep = "\t")
+            rate = dd.read_csv(input.rate, sep = "\t", dtype={'Spliceai_info': 'object'})
             
-            freq_breaks_2 = [-1, 1e-8, 0.5]
-            freq_breaks_9 = [-1, 1e-8, 2e-06, 4.0e-06, 8.0e-06, 1.6e-05, 5e-05, 5e-04, 5e-03, 0.5] 
-            freq_breaks_10 = [-1, 1e-8, 2e-06, 4.0e-06, 8.0e-06, 1.6e-05, 5e-05, 5e-04, 5e-03, 5e-02, 0.5] 
-
-            rate["Freq_bin_2"] = rate['MAF'].map_partitions(pd.cut, freq_breaks_2, labels = False)
-            rate["Freq_bin_9"] = rate['MAF'].map_partitions(pd.cut, freq_breaks_9, labels = False)
-            rate["Freq_bin_10"] = rate['MAF'].map_partitions(pd.cut, freq_breaks_10, labels = False)
+            df = pd.read_csv(input.denovo)
             
+            df = df.rename({"Alt": "Allele"}, axis = 1)
             
-            columns_list = ['Freq_bin_2', 'Freq_bin_9', 'Freq_bin_10']
-            for i in range(3):
-                freq_bin = columns_list[i]
-                
-                rate_groupby = rate[["index", "mu_index", freq_bin]].groupby(["mu_index", freq_bin]).count().compute()
-                rate_pivot = rate_groupby.reset_index().pivot(index='mu_index', columns=freq_bin, values='index')
-
-                rate_pivot.to_csv(output[i], sep = "\t", index = None)   
-                
-rule divide_by_mut_type:
+            df = df[df["Type"] == "SNV"]
+            df = df[df["Chr"] == "chr" + wildcards.chrom]
+            
+            df_case = df[df["Pheno"] == "case"]
+            df_control = df[df["Pheno"] == "control"]
+            
+            df_case["denovo_an_case"] = 1
+            df_control["denovo_an_control"] = 1
+            
+            rate = rate.merge(df_case[["Pos", "Allele", "denovo_an_case"]], on = ["Pos", "Allele"], how = "left")
+            rate = rate.merge(df_control[["Pos", "Allele", "denovo_an_control"]], on = ["Pos", "Allele"], how = "left")
+            
+            rate.to_csv(output[0], sep = "\t", single_file = True, index = None)
+            
+rule add_zoonomia:
     input:
-        [os.path.join(scratch_dir, "{header}/" + chrom +".tsv") for chrom in all_chrom_set],
+        rate = os.path.join(scratch_dir, "results/footprints/denovo/{chrom}.tsv"),
+        zoo = os.path.join(KL_data_dir, "zoonomia/cactus241way.phyloP_chr{chrom}.wig")
     output:
-        os.path.join(scratch_dir, "{header}/T_A.tsv"),
-        os.path.join(scratch_dir, "{header}/T_G.tsv"),
-        os.path.join(scratch_dir, "{header}/T_C.tsv"),
-        os.path.join(scratch_dir, "{header}/C_G.tsv"),
-        os.path.join(scratch_dir, "{header}/C_A.tsv"),
-        os.path.join(scratch_dir, "{header}/C_T.tsv"),
+        os.path.join(scratch_dir, "results/footprints/zoonomia/{chrom}.tsv"),
     resources:
         partition="short",
         runtime="0-12:00",
         cpus_per_task=5,
         mem_mb=get_mem_mb
     run:
+        from dask.distributed import Client
+
         with Client() as client:
-            def flip(base_pair):
-                if base_pair == "T":
-                    return "A"
-                if base_pair == "A":
-                    return "T"
-                if base_pair == "G":
-                    return "C"
-                if base_pair == "C":
-                    return "G"
-                else:
-                    return base_pair
+            rate = dd.read_csv(input.rate, sep = "\t", dtype={'Spliceai_info': 'object'})
 
-            def flip_mutation_type(mut_type):
-                if (mut_type[0] == "G") | (mut_type[0] == "A"):
-                    output = ""
-                    for i in mut_type:
-                        output += flip(i)
-                    return output
-                else:
-                    return mut_type
-            
-            rate = dd.read_csv(input, sep = "\t")
-            
-            rate["Allele_ref"] = rate["index"].str.split("_", n = 2, expand = True)[1]
-            rate["Allele"] = rate["index"].str.split("_", n = 2, expand = True)[2]
+            zoo = pd.read_csv(input.zoo, sep = "\t", names = ["Pos", "phyloP"], dtype={'Pos': 'int', 'phyloP': 'float64'})
+#             zoo = zoo.repartition(partition_size="1GB")
 
-            rate["mut_type"] = rate["Allele_ref"] + "_" + rate["Allele"]
-            
-            rate["mut_type"] = rate.apply(lambda row: flip_mutation_type(row["mut_type"]), axis=1, meta=pd.Series(dtype="string"))
-            
-            mut_type_list = ["T_A", "T_G", "T_C", "C_G", "C_A", "C_T"]
-            
-            columns_list = ['Freq_bin_2', 'Freq_bin_9', 'Freq_bin_10']
-            for i in range(6):
-                mut_type = mut_type_list[i]
-                
-                rate_mut_type = rate[rate["mut_type"] == mut_type]
-                
-                rate_mut_type.to_csv(output[i], single_file = True, sep = "\t", index = None) 
+            rate = rate.merge(zoo, on = "Pos", how = "left")
 
-rule pivot_by_mut_type:
+            rate["phyloP"] = rate["phyloP"].fillna(0)
+            rate["phyloP_pos"] = rate["phyloP"].where(rate["phyloP"] > 0, 0)
+
+            rate = rate.repartition(partition_size="3GB")
+
+            rate.to_csv(output[0], sep = "\t", single_file = True, index = None)
+
+
+################################################# calculate various Zscores ##################################################
+# create data for neutral sites
+rule zscore_binary:
     input:
-        os.path.join(scratch_dir, "{header}/{filename}.tsv"),
+        rate = os.path.join(scratch_dir, "results/footprints/denovo/{chrom}.tsv"),
+        neutral = os.path.join(KL_data_dir, "whole_genome/freq_bins/freq_bin_9_all.tsv"),
     output:
-        os.path.join(KL_data_dir, "{header}/{filename}/pivot_bin_2.tsv"),
-        os.path.join(KL_data_dir, "{header}/{filename}/pivot_bin_9.tsv"),
-        os.path.join(KL_data_dir, "{header}/{filename}/pivot_bin_10.tsv"),
+        os.path.join(KL_data_dir, "results/footprints/zscore/binary/{chrom}.tsv"),
     resources:
         partition="short",
         runtime="0-1:00",
@@ -204,57 +142,124 @@ rule pivot_by_mut_type:
     run:
         with Client() as client:
             
-            rate = dd.read_csv(input, sep = "\t")
+            filename = input.rate
             
-            freq_breaks_2 = [-1, 1e-8, 0.5]
-            freq_breaks_9 = [-1, 1e-8, 2e-06, 4.0e-06, 8.0e-06, 1.6e-05, 5e-05, 5e-04, 5e-03, 0.5] 
-            freq_breaks_10 = [-1, 1e-8, 2e-06, 4.0e-06, 8.0e-06, 1.6e-05, 5e-05, 5e-04, 5e-03, 5e-02, 0.5] 
+            ddf = dd.read_csv(filename, sep = "\t", dtype={'Spliceai_info': 'object'})
+            
+            ## filter common variants
+            ddf = ddf[ddf["AF"] < 0.05]
+                        
+            df = pd.read_csv(input.ac, sep = "\t")
+            df = df.rename({"AC_total": "expected_AC"}, axis = 1)
+            
+            ddf = ddf.merge(df[["mu", 'expected_AC', 'AC_var']], on = "mu", how = "left")
+            
+            df_groupby = ddf[["footprint_identifier", "mu", 'expected_AC', 'AC_var', "AC_total"]].groupby("footprint_identifier").sum().compute()
+            df_groupby["AN_mean"] = ddf[["footprint_identifier", "AN_total_interpolate"]].groupby("footprint_identifier").mean().compute()
+            df_groupby["sites"] = ddf[["footprint_identifier", "mu", "AC_total"]].groupby("footprint_identifier").size().compute()
+            
+            df_groupby.to_csv(output[0], sep = "\t")
 
-            rate["Freq_bin_2"] = rate['MAF'].map_partitions(pd.cut, freq_breaks_2, labels = False)
-            rate["Freq_bin_9"] = rate['MAF'].map_partitions(pd.cut, freq_breaks_9, labels = False)
-            rate["Freq_bin_10"] = rate['MAF'].map_partitions(pd.cut, freq_breaks_10, labels = False)
-            
-            
-            columns_list = ['Freq_bin_2', 'Freq_bin_9', 'Freq_bin_10']
-            for i in range(3):
-                freq_bin = columns_list[i]
-                
-                rate_groupby = rate[["index", "mu_index", freq_bin]].groupby(["mu_index", freq_bin]).count().compute()
-                rate_pivot = rate_groupby.reset_index().pivot(index='mu_index', columns=freq_bin, values='index')
 
-                rate_pivot.to_csv(output[i], sep = "\t")  
-                
-rule ratio_by_mut_type:
+rule zscore_AC:
     input:
-        neutral = os.path.join(KL_data_dir, "results/method_validation/split/neutral/pivot_bin_10.tsv"),
-        mut_types =[os.path.join(KL_data_dir, "{header}/"+ mut_type+ "/pivot_bin_10.tsv") for mut_type in mut_type_list]
+        rate = os.path.join(scratch_dir, "results/footprints/denovo/{chrom}.tsv"),
+        ac = os.path.join(KL_data_dir, "whole_genome/neutral/expected_AC/all.tsv")
     output:
-        [os.path.join(KL_data_dir, "{header}/mut_type_ratios_" + str(i) +".tsv") for i in range(10)]
+        os.path.join(KL_data_dir, "results/footprints/zscore/AC/{chrom}.tsv"),
     resources:
         partition="short",
         runtime="0-1:00",
-        cpus_per_task=1,
-        mem_mb=2000
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
     run:
-        df_neutral= pd.read_csv(input.neutral, sep = "\t")
-        df_neutral = df_neutral.div(df_neutral.sum(axis=1), axis=0)
-        
-        for i in range(10):
+        with Client() as client:
+            
+            filename = input.rate
+            
+            ddf = dd.read_csv(filename, sep = "\t", dtype={'Spliceai_info': 'object'})
+            
+            ## filter common variants
+            ddf = ddf[ddf["AF"] < 0.05]
+                        
+            df = pd.read_csv(input.ac, sep = "\t")
+            df = df.rename({"AC_total": "expected_AC"}, axis = 1)
+            
+            ddf = ddf.merge(df[["mu", 'expected_AC', 'AC_var']], on = "mu", how = "left")
+            
+            df_groupby = ddf[["footprint_identifier", "mu", 'expected_AC', 'AC_var', "AC_total"]].groupby("footprint_identifier").sum().compute()
+            df_groupby["AN_mean"] = ddf[["footprint_identifier", "AN_total_interpolate"]].groupby("footprint_identifier").mean().compute()
+            df_groupby["sites"] = ddf[["footprint_identifier", "mu", "AC_total"]].groupby("footprint_identifier").size().compute()
+            
+            df_groupby.to_csv(output[0], sep = "\t")
 
-            df_output = df_neutral[[str(i)]].rename({str(i): "neutral_SFS"}, axis = 1)
+################################################# get validation data ##################################################
+## calculate phyloP for all of the footprints
+## first output for output without filtering
+## second output for output after filtering out for AF > 0.05
+rule get_phyloP_for_footprints:
+    input:
+        os.path.join(scratch_dir, "results/footprints/zoonomia/{chrom}.tsv")
+    output:
+        os.path.join(KL_data_dir, "results/footprints/phyloP/{chrom}.tsv"),        
+        os.path.join(KL_data_dir, "results/footprints/phyloP/filtered_common_{chrom}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            filename = input[0]
+            
+            ddf = dd.read_csv(filename, sep = "\t", dtype={'Spliceai_info': 'object'})
+            
+            df_groupby = ddf[["footprint_identifier", "phyloP", "phyloP_pos"]].groupby("footprint_identifier").mean().compute()
+            df_groupby["phyloP_max"] = ddf[["footprint_identifier", "phyloP"]].groupby("footprint_identifier").max().compute()
+            df_groupby["phyloP_median"] = ddf[["footprint_identifier", "phyloP"]].groupby("footprint_identifier").median().compute()
+            
+            df_groupby.to_csv(output[0], sep = "\t")
 
-            for mut_type in mut_type_list:
-                filename = os.path.join(KL_data_dir, wildcards.header + "/"+ mut_type +"/pivot_bin_10.tsv")
+            ## filter common variants
+            ddf = ddf[ddf["AF"] < 0.05]
+            
+            df_groupby = ddf[["footprint_identifier", "phyloP", "phyloP_pos"]].groupby("footprint_identifier").mean().compute()
+            df_groupby["phyloP_max"] = ddf[["footprint_identifier", "phyloP"]].groupby("footprint_identifier").max().compute()
+            df_groupby["phyloP_median"] = ddf[["footprint_identifier", "phyloP"]].groupby("footprint_identifier").median().compute()
+            
+            df_groupby.to_csv(output[1], sep = "\t")
 
-                df= pd.read_csv(filename, sep = "\t")
-                df = df.set_index("mu_index")
+## calculate de novo for all of the footprints
+rule get_denovo:
+    input:
+        rate = os.path.join(scratch_dir, "results/footprints/denovo/{chrom}.tsv"),
+        ac = os.path.join(KL_data_dir, "whole_genome/neutral/expected_AC/all.tsv")
+    output:
+        os.path.join(KL_data_dir, "results/footprints/denovo/{chrom}.tsv"),
+        os.path.join(KL_data_dir, "results/footprints/denovo/filtered_common_{chrom}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            filename = input.rate
+            
+            ddf = dd.read_csv(filename, sep = "\t", dtype={'Spliceai_info': 'object'})
 
-                df_output[mut_type + "_site_num"] = df.sum(axis = 1)
+            ddf["denovo_an_case"] = ddf["denovo_an_case"].fillna(0)
+            ddf["denovo_an_control"] = ddf["denovo_an_control"].fillna(0)
+            
+            df_groupby = ddf[["footprint_identifier", "denovo_an_case", "denovo_an_control"]].groupby("footprint_identifier").sum().compute()
 
-                df = df.fillna(0)
+            df_groupby.to_csv(output[0], sep = "\t")
+            
+            ## filter common variants
+            ddf = ddf[ddf["AF"] < 0.05]
+            df_groupby = ddf[["footprint_identifier", "denovo_an_case", "denovo_an_control"]].groupby("footprint_identifier").sum().compute()
 
-                df = df.div(df.sum(axis=1), axis=0)
+            df_groupby.to_csv(output[1], sep = "\t")
 
-                df_output[mut_type + "_ratio"] = df[str(i)] / df_neutral[str(i)]
-
-            df_output.to_csv(output[i], sep = "\t")
