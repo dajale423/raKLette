@@ -2,7 +2,7 @@ import sys
 sys.path.insert(0,'/home/djl34/kl_git/scripts')
 from snakefile_imports import *
 
-n = 0
+n = 1
 
 ## function for allocating memory into 
 def get_mem_mb(wildcards, attempt):
@@ -18,19 +18,27 @@ file_directory = "/".join(cwd.split("/")[-2:]) + "/"
 
 ##############################################################################################################################   
 ## for epigenetic features
-filename_list = [os.path.join(scratch_dir, "results/footprints/split/{chrom}.tsv"),
-                 os.path.join(KL_data_dir, "results/footprints/mu_sum/{chrom}.tsv"),
-                 os.path.join(scratch_dir, "results/footprints/denovo/{chrom}.tsv"),
-                 os.path.join(scratch_dir, "results/footprints/zoonomia/{chrom}.tsv"),
-                 os.path.join(KL_data_dir, "results/footprints/phyloP/{chrom}.tsv"),]
+# filename_list = [os.path.join(scratch_dir, "results/footprints/split/{chrom}.tsv"),
+#                  os.path.join(KL_data_dir, "results/footprints/sites_table/{chrom}.tsv"),
+#                  os.path.join(KL_data_dir, "results/footprints/zscore/binary/{chrom}.tsv"),
+#                  os.path.join(KL_data_dir, "results/footprints/zscore/AC/{chrom}.tsv"),
+#                  os.path.join(KL_data_dir, "results/footprints/phyloP/filtered_common_{chrom}.tsv"),
+#                  os.path.join(KL_data_dir, "results/footprints/denovo/filtered_common_{chrom}.tsv")]
 
-# filename_list = [os.path.join(scratch_dir, "results/method_validation/split/neutral/{chrom}.tsv")]
+filename_list = [os.path.join(KL_data_dir, "results/footprints/denovo/filtered_common_{chrom}.tsv")]
+
+# filename_list = [os.path.join(scratch_dir, "results/footprints/denovo/{chrom}.tsv")]
 
 input_list = [filename.replace("{chrom}", str(chromosome)) for filename in filename_list for chromosome in chrom_set]
 
 rule all:
     input:
-        input_list,
+        os.path.join(KL_data_dir, "whole_genome/neutral/expected_AC/log_plus_one.tsv"),
+        os.path.join(KL_data_dir, "whole_genome/neutral/expected_AC/sqrt.tsv"),
+        os.path.join(KL_data_dir, "whole_genome/neutral/expected_AC/no_transform.tsv")
+        # input_list,
+        # [os.path.join(scratch_dir, f"results/footprints/top/top_region_{rank}.tsv")  for rank in [1000, 5000]]
+        # [os.path.join(scratch_dir, f"results/footprints/top/top_{rank}.tsv") for rank in [1000, 5000]]
 
 ################################################# creating data for results ##################################################
 
@@ -65,7 +73,8 @@ rule make_footprints:
 rule add_denovo:
     input:
         rate = os.path.join(scratch_dir, "results/footprints/split/{chrom}.tsv"),
-        denovo = os.path.join(KL_data_dir, "de_novo/an_etal/aat6576_table-s2.csv")
+        denovo = os.path.join(KL_data_dir, "de_novo/an_etal/aat6576_table-s2.csv"),
+        denovo2 = os.path.join(KL_data_dir, "de_novo/halldorsson_etal/aau1043_datas5_revision1.tsv"),
     output:
         os.path.join(scratch_dir, "results/footprints/denovo/{chrom}.tsv")
     resources:
@@ -93,12 +102,20 @@ rule add_denovo:
             
             rate = rate.merge(df_case[["Pos", "Allele", "denovo_an_case"]], on = ["Pos", "Allele"], how = "left")
             rate = rate.merge(df_control[["Pos", "Allele", "denovo_an_control"]], on = ["Pos", "Allele"], how = "left")
+
+            #for second control_file
+            df = pd.read_csv(input.denovo2, sep = "\t", comment = "#")
+            df = df.rename({"Alt": "Allele"}, axis = 1)
+            df = df[df["Chr"] == f"chr{wildcards.chrom}"]
+
+            df["denovo_halldorsson_control"] = 1
+            rate = rate.merge(df[["Pos", "Allele", "denovo_halldorsson_control"]], on = ["Pos", "Allele"], how = "left")
             
             rate.to_csv(output[0], sep = "\t", single_file = True, index = None)
             
-rule add_zoonomia:
+rule add_zoonomia_footprints:
     input:
-        rate = os.path.join(scratch_dir, "results/footprints/denovo/{chrom}.tsv"),
+        rate = os.path.join(scratch_dir, "results/footprints/split/{chrom}.tsv"),
         zoo = os.path.join(KL_data_dir, "zoonomia/cactus241way.phyloP_chr{chrom}.wig")
     output:
         os.path.join(scratch_dir, "results/footprints/zoonomia/{chrom}.tsv"),
@@ -125,15 +142,206 @@ rule add_zoonomia:
 
             rate.to_csv(output[0], sep = "\t", single_file = True, index = None)
 
+rule filter_columns:
+    input:
+        rate = os.path.join(scratch_dir, "results/footprints/zoonomia/{chrom}.tsv"),
+    output:
+        os.path.join(KL_data_dir, "results/footprints/sites_table/{chrom}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        from dask.distributed import Client
+
+        with Client() as client:
+            rate = dd.read_csv(input.rate, sep = "\t", dtype={'Spliceai_info': 'object'})
+
+            rate = rate[["mu", "mu_index", "AN_total_interpolate", "AC_total", "footprint_identifier", "denovo_an_case", "denovo_an_control", "phyloP"]]
+            
+            rate.to_csv(output[0], sep = "\t", single_file = True, index = None)
+
+
+################################################# play around with AC distribution ##################################################
+
+## calculate expected AC
+# mark which regions are exonic
+rule calculate_expected_AC:
+    input:
+        rate = os.path.join(KL_data_dir, "whole_genome/neutral/{chrom}/_metadata"),
+    output:
+        os.path.join(scratch_dir, "whole_genome/neutral/AC_total/{chrom}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:        
+            rate = dd.read_parquet("/".join(input.rate.split("/")[:-1]) + "/")
+            
+            df = rate[["mu", "AC_total", 'AF', "Neutral"]]
+            df = df[df["Neutral"] == 1]
+            df = df.compute()
+                        
+            df = df[["mu", "AC_total"]]
+            
+            df.to_csv(output[0], sep = "\t", index = None)
+
+rule calculate_expected_AC_all:
+    input:
+        [os.path.join(scratch_dir, "whole_genome/neutral/AC_total/" + chrom + ".tsv") for chrom in all_chrom_set]
+    output:
+        os.path.join(KL_data_dir, "whole_genome/neutral/expected_AC/no_transform.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:        
+            rate = dd.read_csv(input, sep = "\t")
+            
+            df = rate.compute()
+            
+            df_group = pd.DataFrame(df.groupby("mu").mean())
+            df_group["AC_var"] = df.groupby("mu").var()
+            df_group["sites"] = df.groupby("mu").size()
+            df_group = df_group.reset_index()
+            
+            df_group = df_group.rename({"AC_total": "expected_AC"}, axis = 1)
+            
+            df_group.to_csv(output[0], sep = "\t", index = None)
+
+rule calculate_expected_AC_sqrt:
+    input:
+        [os.path.join(scratch_dir, "whole_genome/neutral/AC_total/" + chrom + ".tsv") for chrom in all_chrom_set]
+    output:
+        os.path.join(KL_data_dir, "whole_genome/neutral/expected_AC/sqrt.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:        
+            rate = dd.read_csv(input, sep = "\t")
+            
+            df = rate.compute()
+
+            df["AC_total"] = df["AC_total"].apply(lambda x: np.sqrt(x), meta=df["AC_total"])
+            
+            df_group = pd.DataFrame(df.groupby("mu").mean())
+            df_group["AC_var"] = df.groupby("mu").var()
+            df_group["sites"] = df.groupby("mu").size()
+            df_group = df_group.reset_index()
+            
+            df_group = df_group.rename({"AC_total": "expected_AC"}, axis = 1)
+            
+            df_group.to_csv(output[0], sep = "\t", index = None)
+
+rule calculate_expected_AC_log:
+    input:
+        [os.path.join(scratch_dir, "whole_genome/neutral/AC_total/" + chrom + ".tsv") for chrom in all_chrom_set]
+    output:
+        os.path.join(KL_data_dir, "whole_genome/neutral/expected_AC/log_plus_one.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:        
+            rate = dd.read_csv(input, sep = "\t")
+            
+            df = rate.compute()
+
+            df["AC_total"] = df["AC_total"].apply(lambda x: np.log(x+1), meta=df["AC_total"])
+            
+            df_group = pd.DataFrame(df.groupby("mu").mean())
+            df_group["AC_var"] = df.groupby("mu").var()
+            df_group["sites"] = df.groupby("mu").size()
+            df_group = df_group.reset_index()
+            
+            df_group = df_group.rename({"AC_total": "expected_AC"}, axis = 1)
+            
+            df_group.to_csv(output[0], sep = "\t", index = None)
+
+rule zscore_AC_transformation:
+    input:
+        rate = os.path.join(scratch_dir, "results/footprints/split/{chrom}.tsv"),
+        ac = os.path.join(KL_data_dir, "whole_genome/neutral/expected_AC/{transformation}.tsv")
+    output:
+        os.path.join(KL_data_dir, "results/footprints/zscore/AC/{transformation}/{chrom}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            filename = input.rate
+            
+            ddf = dd.read_csv(filename, sep = "\t", dtype={'Spliceai_info': 'object'})
+                                    
+            df = pd.read_csv(input.ac, sep = "\t")
+            df = df.rename({"AC_total": "expected_AC"}, axis = 1)
+            
+            ddf = ddf.merge(df[["mu", 'expected_AC', 'AC_var']], on = "mu", how = "left")
+            
+            df_groupby = ddf[["footprint_identifier", "mu", 'expected_AC', 'AC_var', "AC_total"]].groupby("footprint_identifier").sum().compute()
+            df_groupby["AN_mean"] = ddf[["footprint_identifier", "AN_total_interpolate"]].groupby("footprint_identifier").mean().compute()
+            df_groupby["sites"] = ddf[["footprint_identifier", "mu", "AC_total"]].groupby("footprint_identifier").size().compute()
+            
+            df_groupby.to_csv(output[0], sep = "\t")
 
 ################################################# calculate various Zscores ##################################################
 # create data for neutral sites
 rule zscore_binary:
     input:
-        rate = os.path.join(scratch_dir, "results/footprints/denovo/{chrom}.tsv"),
+        rate = os.path.join(scratch_dir, "results/footprints/split/{chrom}.tsv"),
         neutral = os.path.join(KL_data_dir, "whole_genome/freq_bins/freq_bin_9_all.tsv"),
     output:
         os.path.join(KL_data_dir, "results/footprints/zscore/binary/{chrom}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            filename = input.rate
+            
+            ddf = dd.read_csv(filename, sep = "\t", dtype={'Spliceai_info': 'object'})
+            
+            # ## filter common variants
+            # ddf = ddf[ddf["AF"] < 0.05]
+
+            #from neutral SFS calculate probably of being polymorphic
+            neutral = pd.read_csv(input.neutral, sep = "\t")
+            neutral = neutral.rename({"0.0": "monomorphic"}, axis = 1)
+            neutral["polymorphic"] = 1 - neutral["monomorphic"]
+            neutral_dict = dict(zip(neutral.index, neutral.polymorphic))
+            
+            ddf["polymorphic"] = 1
+            ddf["polymorphic"] = ddf["polymorphic"].where(ddf["AC_total"] > 0, 0)
+            ddf["polymorphic_expected"] = ddf['mu_index'].map(neutral_dict)
+
+            df_groupby = ddf[["footprint_identifier", "polymorphic", 'polymorphic_expected']].groupby("footprint_identifier").sum().compute()
+            df_groupby["sites"] = ddf[["footprint_identifier", "mu", "AC_total"]].groupby("footprint_identifier").size().compute()
+            
+            df_groupby.to_csv(output[0], sep = "\t")
+
+
+rule zscore_AC:
+    input:
+        rate = os.path.join(scratch_dir, "results/footprints/split/{chrom}.tsv"),
+        ac = os.path.join(KL_data_dir, "whole_genome/neutral/expected_AC/all.tsv")
+    output:
+        os.path.join(KL_data_dir, "results/footprints/zscore/AC/{chrom}.tsv"),
     resources:
         partition="short",
         runtime="0-1:00",
@@ -160,13 +368,12 @@ rule zscore_binary:
             
             df_groupby.to_csv(output[0], sep = "\t")
 
-
-rule zscore_AC:
+rule zscore_KL:
     input:
-        rate = os.path.join(scratch_dir, "results/footprints/denovo/{chrom}.tsv"),
-        ac = os.path.join(KL_data_dir, "whole_genome/neutral/expected_AC/all.tsv")
+        rate = os.path.join(scratch_dir, "results/footprints/split/{chrom}.tsv"),
+        neutral = os.path.join(KL_data_dir, "whole_genome/freq_bins/freq_bin_9_all.tsv"),
     output:
-        os.path.join(KL_data_dir, "results/footprints/zscore/AC/{chrom}.tsv"),
+        os.path.join(KL_data_dir, "results/footprints/zscore/kl/{chrom}.tsv"),
     resources:
         partition="short",
         runtime="0-1:00",
@@ -179,16 +386,20 @@ rule zscore_AC:
             
             ddf = dd.read_csv(filename, sep = "\t", dtype={'Spliceai_info': 'object'})
             
-            ## filter common variants
-            ddf = ddf[ddf["AF"] < 0.05]
-                        
-            df = pd.read_csv(input.ac, sep = "\t")
-            df = df.rename({"AC_total": "expected_AC"}, axis = 1)
+            # ## filter common variants
+            # ddf = ddf[ddf["AF"] < 0.05]
+
+            #from neutral SFS calculate probably of being polymorphic
+            neutral = pd.read_csv(input.neutral, sep = "\t")
+            neutral = neutral.rename({"0.0": "monomorphic"}, axis = 1)
+            neutral["polymorphic"] = 1 - neutral["monomorphic"]
+            neutral_dict = dict(zip(neutral.index, neutral.polymorphic))
             
-            ddf = ddf.merge(df[["mu", 'expected_AC', 'AC_var']], on = "mu", how = "left")
-            
-            df_groupby = ddf[["footprint_identifier", "mu", 'expected_AC', 'AC_var', "AC_total"]].groupby("footprint_identifier").sum().compute()
-            df_groupby["AN_mean"] = ddf[["footprint_identifier", "AN_total_interpolate"]].groupby("footprint_identifier").mean().compute()
+            ddf["polymorphic"] = 1
+            ddf["polymorphic"] = ddf["polymorphic"].where(ddf["AC_total"] > 0, 0)
+            ddf["polymorphic_expected"] = ddf['mu_index'].map(neutral_dict)
+
+            df_groupby = ddf[["footprint_identifier", "polymorphic", 'polymorphic_expected']].groupby("footprint_identifier").sum().compute()
             df_groupby["sites"] = ddf[["footprint_identifier", "mu", "AC_total"]].groupby("footprint_identifier").size().compute()
             
             df_groupby.to_csv(output[0], sep = "\t")
@@ -252,14 +463,90 @@ rule get_denovo:
 
             ddf["denovo_an_case"] = ddf["denovo_an_case"].fillna(0)
             ddf["denovo_an_control"] = ddf["denovo_an_control"].fillna(0)
+            ddf["denovo_halldorsson_contorl"] = ddf["denovo_halldorsson_control"].fillna(0)
             
-            df_groupby = ddf[["footprint_identifier", "denovo_an_case", "denovo_an_control"]].groupby("footprint_identifier").sum().compute()
+            df_groupby = ddf[["footprint_identifier", "denovo_an_case", "denovo_an_control", "denovo_halldorsson_control",]].groupby("footprint_identifier").sum().compute()
 
             df_groupby.to_csv(output[0], sep = "\t")
             
             ## filter common variants
             ddf = ddf[ddf["AF"] < 0.05]
-            df_groupby = ddf[["footprint_identifier", "denovo_an_case", "denovo_an_control"]].groupby("footprint_identifier").sum().compute()
+            df_groupby = ddf[["footprint_identifier", "denovo_an_case", "denovo_an_control", "denovo_halldorsson_control"]].groupby("footprint_identifier").sum().compute()
 
             df_groupby.to_csv(output[1], sep = "\t")
 
+################################################# give output of sites ##################################################
+# create data for footprints
+rule make_footprints_sites:
+    input:
+        rate = os.path.join(scratch_dir, "results/footprints/split/{chrom}.tsv"),
+        footprints = "/home/djl34/kl_git/results/footprints/top_{rank}_footprints.tsv"
+    output:
+        os.path.join(scratch_dir, "results/footprints/top/{chrom}_top_{rank}.tsv"),
+        os.path.join(scratch_dir, "results/footprints/top/{chrom}_non_top_{rank}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=30000
+    run:
+        with Client() as client:
+            rate = dd.read_csv(input.rate, sep = "\t", dtype={'Spliceai_info': 'object'})
+            df = pd.read_csv(input.footprints, sep = "\t", dtype={'Spliceai_info': 'object'})
+            footprint_list = list(df["footprint_identifier"])
+            
+            rate = rate[["Pos", "Allele_ref", "Allele", "footprint_identifier"]]
+            rate["Chrom"] = wildcards.chrom
+            rate_filtered = rate[rate["footprint_identifier"].isin(footprint_list)]
+            rate_filtered_out = rate[~rate["footprint_identifier"].isin(footprint_list)]
+            
+            rate_filtered.to_csv(output[0], sep = "\t", index = None, single_file = True)
+            rate_filtered_out.to_csv(output[1], sep = "\t", index = None, single_file = True)
+
+rule sites_combined_by_chrom:
+    input:
+        top = [os.path.join(scratch_dir, f"results/footprints/top/{chrom}_top_{{rank}}.tsv") for chrom in all_chrom_set],
+        bottom = [os.path.join(scratch_dir, f"results/footprints/top/{chrom}_non_top_{{rank}}.tsv") for chrom in all_chrom_set]
+    output:
+        os.path.join(scratch_dir, "results/footprints/top/top_{rank}.tsv"),
+        os.path.join(scratch_dir, "results/footprints/top/non_top_{rank}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=30000
+    run:
+        with Client() as client:
+            rate = dd.read_csv(input.top, sep = "\t", dtype={'Spliceai_info': 'object'})
+            
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+
+            rate = dd.read_csv(input.bottom, sep = "\t", dtype={'Spliceai_info': 'object'})
+            
+            rate.to_csv(output[1], sep = "\t", index = None, single_file = True)
+
+rule get_region:
+    input:
+        top = "/home/djl34/kl_git/results/footprints/top_{rank}_footprints.tsv",
+        footprints = os.path.join(KL_data_dir, "footprints/consensus_footprints_and_collapsed_motifs_hg38.bed.gz")
+    output:
+        os.path.join(scratch_dir, "results/footprints/top/top_region_{rank}.tsv"),
+        os.path.join(scratch_dir, "results/footprints/top/non_top_region_{rank}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=30000
+    run:
+        with Client() as client:
+            df = pd.read_csv(input.top, sep = "\t", dtype={'Spliceai_info': 'object'})
+            footprint_list = list(df["footprint_identifier"])
+
+            fp_header = ['Chrom', 'start', 'end', 'identifier', 'mean_signal', 'num_samples', 'num_fps', 'width', 'summit_pos', 'core_start', 'core_end', 'motif_clusters']
+            fp = pd.read_csv(input.footprints, sep = "\t", names = fp_header)
+            
+            fp_top = fp[fp["identifier"].isin(footprint_list)]
+            fp_bottom = fp[~fp["identifier"].isin(footprint_list)]
+            
+            fp_top.to_csv(output[0], sep = "\t", index = None)
+            fp_bottom.to_csv(output[1], sep = "\t", index = None)
