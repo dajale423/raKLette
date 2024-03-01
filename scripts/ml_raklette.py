@@ -120,6 +120,24 @@ class WinSFS:
         """
         Perform maximum likelihood inference of the non-decreasing latent SFS
         using traditional optimization.
+
+        Parameters
+        ----------
+        jac : bool
+            Whether to use the gradient of the log-likelihood function.
+        beta_max : float
+            The maximum value of the inferred latent SFS.
+        verbose : bool
+            Whether to print the optimization results.
+
+        Returns
+        -------
+        alpha_optim : array_like
+            The inferred non-decreasing latent SFS.
+            (K-1) array.
+        fit_probs_optim : array_like
+            The fit probabilities inferred from the inferred latent SFS.
+            (M x K) array.
         """
         # initialize the optimization
         alpha0 = np.zeros(self.K-1)
