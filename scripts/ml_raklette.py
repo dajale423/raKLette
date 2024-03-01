@@ -116,33 +116,35 @@ class WinSFS:
                       (1 + ZZ[:, None]), 0)
         return -gradient
     
-    def ll_expected(self, YY_samp=None):
-        """
-        Compute the expected log-likelihood of the observed polymorphism data given
-        the given offset from neutral expectation.
+    # def ll_expected(self, YY_samp=None):
         
-        Parameters
-        ----------
         
-        Returns
-        -------
-        loglik : float
-            The log-likelihood of the observed polymorphism data.
-        """
-        if YY_samp is None:
-            YY_samp = self.YY
-            nn_samp = self.nn
-        else:
-            assert YY_samp.shape == self.YY.shape
-            nn_samp = np.sum(YY_samp, axis=1)
+    #     """
+    #     Compute the expected log-likelihood of the observed polymorphism data given
+    #     the given offset from neutral expectation.
         
-        # convert alpha to multinomial coefficients
-        beta = self.beta_0
-        ZZ = np.sum(np.exp(self.beta_0 - beta), 1)
-        loglik = np.sum(-nn_samp * np.log1p(ZZ) + np.sum((self.beta_0 - beta) * YY_samp[:, 1:], 1))
-        # return the log-likelihood
+    #     Parameters
+    #     ----------
         
-        return -loglik/np.sum(nn_samp)
+    #     Returns
+    #     -------
+    #     loglik : float
+    #         The log-likelihood of the observed polymorphism data.
+    #     """
+    #     if YY_samp is None:
+    #         YY_samp = self.YY
+    #         nn_samp = self.nn
+    #     else:
+    #         assert YY_samp.shape == self.YY.shape
+    #         nn_samp = np.sum(YY_samp, axis=1)
+        
+    #     # convert alpha to multinomial coefficients
+    #     beta = self.beta_0
+    #     ZZ = np.sum(np.exp(self.beta_0 - beta), 1)
+    #     loglik = np.sum(-nn_samp * np.log1p(ZZ) + np.sum((self.beta_0 - beta) * YY_samp[:, 1:], 1))
+    #     # return the log-likelihood
+        
+    #     return -loglik/np.sum(nn_samp)
 
     def ml_optim(self, jac=False, beta_max=100, verbose=True):
         """
@@ -235,4 +237,3 @@ class WinSFS:
         fit_sfs = fit_sfs[fit_sfs>0]
         KL = np.sum(fit_sfs * (np.log(fit_sfs) - np.log(neut_sfs)))
         return KL
-    
