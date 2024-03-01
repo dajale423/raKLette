@@ -1,0 +1,296 @@
+## This is a snakemake to organize the dataframes for whole genomes
+## I am making two different dataframes one will contain the features, the other will contain population sequencing data
+
+import os
+import sys
+import glob
+import numpy as np
+
+import math
+import sys
+import random
+import pickle
+
+import pandas as pd
+import dask
+dask.config.set({'distributed.scheduler.allowed-failures': 0})
+import dask.dataframe as dd
+from dask.distributed import Client
+
+sys.path.insert(0,'/home/djl34/lab_pd/bin')
+import genomic
+
+vep = "/home/djl34/bin/ensembl-vep/vep"
+
+pd_data_dir = "/home/djl34/lab_pd/data"
+KL_data_dir = "/home/djl34/lab_pd/kl/data"
+scratch_dir = "/n/scratch/users/d/djl34/"
+
+base_set = ["A", "C", "T", "G"]
+all_chrom_set = [str(x) for x in range(1, 23)]
+chrom_set = all_chrom_set
+# chrom_set.remove("2")
+# chrom_set.remove("3")
+# chrom_set = ["19"]
+
+print(chrom_set)
+
+wildcard_constraints:
+    chrom="\d+"
+    
+n = 0
+    
+def get_mem_mb(wildcards, attempt):
+    return 10000 + (attempt + n) * 30000
+
+def get_mem_mb_small(wildcards, attempt):
+    return attempt * 10000
+
+cwd = os.getcwd()
+file_directory = "/".join(cwd.split("/")[-2:]) + "/"
+
+# include: "/home/djl34/kl_git/preprocessing/whole_genome/Snakefile"
+
+##############################################################################################################################    
+    
+## for epigenetic features
+filename_list = [os.path.join(scratch_dir, "whole_genome/combined/footprints/{chrom}/_metadata"),
+                os.path.join(scratch_dir, "results/method_validation/split/neutral/{chrom}.tsv")]
+
+# filename_list = [os.path.join(scratch_dir, "results/method_validation/split/neutral/{chrom}.tsv")]
+
+input_list = [filename.replace("{chrom}", str(chromosome)) for filename in filename_list for chromosome in chrom_set]
+
+rule all:
+    input:
+        input_list,
+        os.path.join(scratch_dir, "results/method_validation/split/neutral/T_A.tsv"),
+        os.path.join(scratch_dir, "results/method_validation/split/footprints/T_A.tsv"),
+        os.path.join(scratch_dir, "results/method_validation/split/non_footprint_dhs/T_A.tsv"),
+
+        os.path.join(KL_data_dir, "results/method_validation/split/neutral/pivot_bin_2.tsv"),
+        os.path.join(KL_data_dir, "results/method_validation/split/cds/pivot_bin_2.tsv"),
+        os.path.join(KL_data_dir, "results/method_validation/split/footprints/pivot_bin_2.tsv"),
+        os.path.join(KL_data_dir, "results/method_validation/split/non_footprint_dhs/pivot_bin_2.tsv")
+
+################################################# creating data for results ##################################################
+
+# create data for neutral sites
+rule make_neutral:
+    input:
+        os.path.join(KL_data_dir, "whole_genome/cds/{chrom}/_metadata"),
+    output:
+        os.path.join(scratch_dir, "results/method_validation/split/neutral/{chrom}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            filename = input[0]
+            
+            rate = dd.read_parquet("/".join(filename.split("/")[:-1]) + "/")
+            
+            rate = rate[(rate["Neutral"] == 1) & (rate["exon"] == False)]
+            
+            rate[["MAF", "mu_index"]].to_csv(output[0], sep = "\t", single_file = True)
+            
+# create data for neutral sites
+rule make_cds:
+    input:
+        os.path.join(KL_data_dir, "whole_genome/cds/{chrom}/_metadata"),
+    output:
+        os.path.join(scratch_dir, "results/method_validation/split/cds/{chrom}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            filename = input[0]
+            
+            rate = dd.read_parquet("/".join(filename.split("/")[:-1]) + "/")
+            
+            rate = rate[(rate["exon"] == True)]
+            
+            rate[["MAF", "mu_index"]].to_csv(output[0], sep = "\t", single_file = True)
+
+
+# create data for footprint vs non-footprint DHS
+
+rule footprint_dhs:
+    input:
+        rate = os.path.join(KL_data_dir, "whole_genome/cds/{chrom}/_metadata"),
+        feature = os.path.join(KL_data_dir, "whole_genome/footprints/{chrom}/_metadata")
+    output:
+        os.path.join(scratch_dir, "whole_genome/combined/footprints/{chrom}/_metadata")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            rate = dd.read_parquet("/".join(input.rate.split("/")[:-1]) + "/")
+            feature = dd.read_parquet("/".join(input.feature.split("/")[:-1]) + "/")
+            
+            ## filer out cds regions
+#             rate = rate[(rate["exon"] == False)]
+            
+            rate = rate.merge(feature, right_index = True, left_index = True, how = "left")
+            
+#             #split spliceAI_info
+#             columns = ["ALLELE", "SYMBOL", "DS_AG", "DS_AL", "DS_DG", "DS_DL", "DP_AG", "DP_AL", "DP_DG", "DP_DL"]
+#             rate[columns] = rate["Spliceai_info"].str.split("|", expand = True, n = 9)
+            
+#             rate["DS_AG"] = rate["DS_AG"].astype(float)
+#             rate["DS_AL"] = rate["DS_AL"].astype(float)
+#             rate["DS_DG"] = rate["DS_DG"].astype(float)
+#             rate["DS_DL"] = rate["DS_DL"].astype(float)
+            
+#             rate["spliceAI_0.9"] = 1
+#             rate["spliceAI_0.9"] = rate["spliceAI_0.9"].where((rate["DS_AG"] >= 0.9) | (rate["DS_AL"] > 0.9) | (rate["DS_DG"] >= 0.9) | (rate["DS_DL"] > 0.9), 0)
+            
+#             rate["spliceAI_0.5"] = 1
+#             rate["spliceAI_0.5"] = rate["spliceAI_0.5"].where((rate["DS_AG"] >= 0.5) | (rate["DS_AL"] > 0.5) | (rate["DS_DG"] >= 0.5) | (rate["DS_DL"] > 0.5), 0)
+            
+#             rate["spliceAI_0.1"] = 1
+#             rate["spliceAI_0.1"] = rate["spliceAI_0.1"].where((rate["DS_AG"] >= 0.1) | (rate["DS_AL"] > 0.1) | (rate["DS_DG"] >= 0.1) | (rate["DS_DL"] > 0.1), 0)
+            
+            rate = rate.repartition(partition_size="3GB")
+            
+            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = True, compression = "gzip", write_metadata_file = True)
+            
+# create data for neutral sites
+rule make_footprints_dhs:
+    input:
+        os.path.join(scratch_dir, "whole_genome/combined/footprints/{chrom}/_metadata")
+    output:
+        os.path.join(scratch_dir, "results/method_validation/split/footprints/{chrom}.tsv"),
+        os.path.join(scratch_dir, "results/method_validation/split/non_footprint_dhs/{chrom}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            filename = input[0]
+            
+            rate = dd.read_parquet("/".join(filename.split("/")[:-1]) + "/")
+            
+            rate["footprint_mean_signal"] = rate["footprint_mean_signal"].fillna(0)
+            rate["DHS_mean_signal"] = rate["DHS_mean_signal"].fillna(0)
+            
+            # get footprints
+            rate["footprints"] = 1
+            rate["footprints"] = rate["footprints"].where((rate["footprint_mean_signal"] > 0), 0)
+            
+            rate["non_footprints_dhs"] = 1
+            rate["non_footprints_dhs"] = rate["non_footprints_dhs"].where((rate["footprint_mean_signal"] == 0) & (rate["DHS_mean_signal"] > 0), 0)
+            
+            rate_footprints = rate[(rate["footprints"] == 1)]
+            rate_footprints[["MAF", "mu_index"]].to_csv(output[0], sep = "\t", single_file = True)
+            
+            rate_non_footprints_dhs = rate[(rate["non_footprints_dhs"] == 1)]
+            rate_non_footprints_dhs[["MAF", "mu_index"]].to_csv(output[1], sep = "\t", single_file = True)
+            
+################################################# pivot to array ##################################################
+
+rule divide_by_mut_type:
+    input:
+        [os.path.join(scratch_dir, "{header}/" + chrom +".tsv") for chrom in all_chrom_set],
+    output:
+        os.path.join(scratch_dir, "{header}/T_A.tsv"),
+        os.path.join(scratch_dir, "{header}/T_G.tsv"),
+        os.path.join(scratch_dir, "{header}/T_C.tsv"),
+        os.path.join(scratch_dir, "{header}/C_G.tsv"),
+        os.path.join(scratch_dir, "{header}/C_A.tsv"),
+        os.path.join(scratch_dir, "{header}/C_T.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            def flip(base_pair):
+                if base_pair == "T":
+                    return "A"
+                if base_pair == "A":
+                    return "T"
+                if base_pair == "G":
+                    return "C"
+                if base_pair == "C":
+                    return "G"
+                else:
+                    return base_pair
+
+            def flip_mutation_type(mut_type):
+                if (mut_type[0] == "G") | (mut_type[0] == "A"):
+                    output = ""
+                    for i in mut_type:
+                        output += flip(i)
+                    return output
+                else:
+                    return mut_type
+            
+            rate = dd.read_csv(input, sep = "\t")
+            
+            rate["Allele_ref"] = rate["index"].str.split("_", n = 2, expand = True)[1]
+            rate["Allele"] = rate["index"].str.split("_", n = 2, expand = True)[2]
+
+            rate["mut_type"] = rate["Allele_ref"] + "_" + rate["Allele"]
+            
+            rate["mut_type"] = rate.apply(lambda row: flip_mutation_type(row["mut_type"]), axis=1, meta=pd.Series(dtype="string"))
+            
+            mut_type_list = ["T_A", "T_G", "T_C", "C_G", "C_A", "C_T"]
+            
+            columns_list = ['Freq_bin_2', 'Freq_bin_9', 'Freq_bin_10']
+            for i in range(6):
+                mut_type = mut_type_list[i]
+                
+                rate_mut_type = rate[rate["mut_type"] == mut_type]
+                
+                rate_mut_type.to_csv(output[i], single_file = True, sep = "\t", index = None) 
+
+rule pivot:
+    input:
+        [os.path.join(scratch_dir, "{header}/" + chrom +".tsv") for chrom in all_chrom_set],
+    output:
+        os.path.join(KL_data_dir, "{header}/pivot_bin_2.tsv"),
+        os.path.join(KL_data_dir, "{header}/pivot_bin_9.tsv"),
+        os.path.join(KL_data_dir, "{header}/pivot_bin_10.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
+    run:
+        with Client() as client:
+            
+            rate = dd.read_csv(input, sep = "\t")
+            
+            freq_breaks_2 = [-1, 1e-8, 0.5]
+            freq_breaks_9 = [-1, 1e-8, 2e-06, 4.0e-06, 8.0e-06, 1.6e-05, 5e-05, 5e-04, 5e-03, 0.5] 
+            freq_breaks_10 = [-1, 1e-8, 2e-06, 4.0e-06, 8.0e-06, 1.6e-05, 5e-05, 5e-04, 5e-03, 5e-02, 0.5] 
+
+            rate["Freq_bin_2"] = rate['MAF'].map_partitions(pd.cut, freq_breaks_2, labels = False)
+            rate["Freq_bin_9"] = rate['MAF'].map_partitions(pd.cut, freq_breaks_9, labels = False)
+            rate["Freq_bin_10"] = rate['MAF'].map_partitions(pd.cut, freq_breaks_10, labels = False)
+            
+            
+            columns_list = ['Freq_bin_2', 'Freq_bin_9', 'Freq_bin_10']
+            for i in range(3):
+                freq_bin = columns_list[i]
+                
+                rate_groupby = rate[["index", "mu_index", freq_bin]].groupby(["mu_index", freq_bin]).count().compute()
+                rate_pivot = rate_groupby.reset_index().pivot(index='mu_index', columns=freq_bin, values='index')
+
+                rate_pivot.to_csv(output[i], sep = "\t", index = None)   
