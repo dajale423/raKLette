@@ -29,9 +29,20 @@ order_trans = dist.transforms.OrderedTransform()  # y_0=x_0; y_i=y_0+sum_j=1^i e
 ## Transformations of the SFS
 ####################################################
 def multinomial_trans(sfs_probs, offset=None):
+    """
+    Transforms the probabilities of a site frequency spectrum (SFS) into log-odds ratios.
+    
+    Parameters:
+    sfs_probs (array-like): The probabilities of the SFS.
+    offset (float or None): The offset value to be subtracted from the log-odds ratios. Default is None.
+    
+    Returns:
+    log_odds (array-like): The log-odds ratios of the SFS probabilities.
+    """
+
     sfs_probs = np.array(sfs_probs)
     P_0 = sfs_probs[...,0]
-    if offset:
+    if offset is not None:
         betas = np.log(sfs_probs[...,1:]) - np.log(P_0[...,None]) - offset
     else:
         betas = np.log(sfs_probs[...,1:]) - np.log(P_0[...,None])
@@ -42,11 +53,23 @@ def multinomial_trans_torch(sfs_probs):
     return torch.log(sfs_probs[...,1:]) - torch.log(P_0[...,None])
 
 def KL_fw(neut_probs, sel_probs):
+    """
+    Calculates the Kullback-Leibler divergence between two probability distributions.
+    
+    Parameters:
+        neut_probs (numpy.ndarray): The probability distribution of the neutral model.
+        sel_probs (numpy.ndarray): The probability distribution of the selection model.
+    
+    Returns:
+        numpy.ndarray: The Kullback-Leibler divergence between the two probability distributions.
+    """
     return np.sum(neut_probs * (np.log(neut_probs) - np.log(sel_probs)), axis=-1)
 
 def KL_rv(neut_probs, sel_probs):
     return np.sum(sel_probs * (np.log(sel_probs) - np.log(neut_probs)), axis=-1)
 
+
+# function to 
 
 ## Model fitting
 ####################################################
