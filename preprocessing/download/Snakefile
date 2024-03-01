@@ -1,50 +1,21 @@
-import os
 import sys
-import glob
-import numpy as np
-import pandas as pd
-import math
-import sys
-import random
-import pickle
-import dask.dataframe as dd
-from dask.distributed import Client, LocalCluster
+sys.path.insert(0,'/home/djl34/kl_git/scripts')
+from snakefile_imports import *
 
-import csv
+n = 0
 
-sys.path.insert(0,'/home/djl34/lab_pd/bin')
-import genomic
-
-pd_data_dir = "/home/djl34/lab_pd/data"
-KL_data_dir = "/home/djl34/lab_pd/kl/data"
-scratch_dir = "/n/scratch3/users/d/djl34"
-
-base_set = ["A", "C", "T", "G"]
-chrom_set = [str(x) for x in range(1, 23)]
-# chrom_set = ["22"]
-
+## function for allocating memory into 
 def get_mem_mb(wildcards, attempt):
-    return attempt * 25000
-
-wildcard_constraints:
-    chrom="\d+"
+    return 10000 + (attempt + n) * 30000
     
-##############################################################################################################################
-
-# annotation_file = "spliceai_grch38.txt"
-
-# df_annot = pd.read_csv(pd_data_dir + "/" + annotation_file, sep = "\t")
-# spliceai_gene_list = list(df_annot[df_annot["CHROM"].isin(chrom_set)]["#NAME"])
-# spliceai_gene_list = spliceai_gene_list[:5]
-
 
 ##############################################################################################################################
 
-rule all:
-    input:
-        [os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.sites.chr" + chrom +".vcf.bgz") for chrom in chrom_set],
-        [os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.sites.chr" + chrom +".vcf.bgz.tbi") for chrom in chrom_set],
-        os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.coverage.summary.tsv.bgz")
+# rule all:
+#     input:
+#         [os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.sites.chr" + chrom +".vcf.bgz") for chrom in chrom_set],
+#         [os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.sites.chr" + chrom +".vcf.bgz.tbi") for chrom in chrom_set],
+#         os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.coverage.summary.tsv.bgz")
 #         [os.path.join(scratch_dir, "downloads/gnomad.genomes.v3.1.2.sites.chr" + chrom +".vcf.bgz.tbi") for chrom in chrom_set],
 #         [os.path.join(scratch_dir, "downloads/gnomad.genomes.v3.1.2.sites.chr" + chrom +".tsv") for chrom in chrom_set], 
 
@@ -201,8 +172,16 @@ rule gnomad_v3_cov_split_by_chrom:
             df = df[df["Chrom"] == "chr" + wildcards.chrom]
             
             df.to_csv(output[0], index = False, sep = "\t", single_file = True)
-            
-            
+                    
+# rule gnomAD_v3_to_tsv:
+#     input:
+#         os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.sites.chr{chrom}.vcf.bgz")
+#     output:
+#         os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.sites.chr{chrom}.tsv")
+#     shell:        
+#         "bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\t%FILTER\t%AC\t%AN\t%AF\n' {input} > {output}"
+
+
 rule download_gnomad_v4:
     input:
     resources:
@@ -238,14 +217,6 @@ rule download_gnomad_v4_cov:
         mem_mb=500
     shell:
         "wget -P /n/scratch3/users/d/djl34/downloads/ https://storage.googleapis.com/gcp-public-data--gnomad/release/4.0/coverage/exomes/gnomad.exomes.v4.0.coverage.summary.tsv.bgz"
-        
-# rule gnomAD_v3_to_tsv:
-#     input:
-#         os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.sites.chr{chrom}.vcf.bgz")
-#     output:
-#         os.path.join(scratch_dir, "downloads/gnomad.exomes.v4.0.sites.chr{chrom}.tsv")
-#     shell:        
-#         "bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\t%FILTER\t%AC\t%AN\t%AF\n' {input} > {output}"
 
 ################################################## get zoonomia #######################################################
         
