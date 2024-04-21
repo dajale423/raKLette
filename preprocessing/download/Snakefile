@@ -2,11 +2,11 @@ import sys
 sys.path.insert(0,'/home/djl34/kl_git/scripts')
 from snakefile_imports import *
 
-n = 0
+# n = 0
 
-## function for allocating memory into 
-def get_mem_mb(wildcards, attempt):
-    return 10000 + (attempt + n) * 30000
+# ## function for allocating memory into 
+# def get_mem_mb(wildcards, attempt):
+#     return 10000 + (attempt + n) * 30000
     
 
 ##############################################################################################################################
@@ -159,7 +159,12 @@ rule gnomad_v3_cov_split_by_chrom:
     input:
         os.path.join(scratch_dir, "downloads/gnomad.genomes.r3.0.1.coverage.summary.tsv")
     output:
-        os.path.join(pd_data_dir, "gnomadv3.1.2/gnomad.genomes.r3.0.1.coverage.summary.chr{chrom}.tsv")
+        os.path.join(pd_data_dir, "gnomadv3.1.2/cov/{chrom}/_metadata")
+    resources:
+        partition="short",
+        runtime="0-10:00",
+        cpus_per_task=5,
+        mem_mb=get_mem_mb
     run:
         with Client() as client:
             df = dd.read_csv(input[0], sep = "\t")
@@ -171,7 +176,14 @@ rule gnomad_v3_cov_split_by_chrom:
             
             df = df[df["Chrom"] == "chr" + wildcards.chrom]
             
-            df.to_csv(output[0], index = False, sep = "\t", single_file = True)
+            df["Pos"] = dd.to_numeric(df['Pos'], errors='coerce').fillna(0).astype(int)
+            
+            df = df[["Chrom", "Pos", "mean", "median_approx"]]
+            
+            df = df.repartition(partition_size="1GB")
+            
+            df.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+
                     
 # rule gnomAD_v3_to_tsv:
 #     input:
@@ -218,6 +230,60 @@ rule download_gnomad_v4_cov:
     shell:
         "wget -P /n/scratch3/users/d/djl34/downloads/ https://storage.googleapis.com/gcp-public-data--gnomad/release/4.0/coverage/exomes/gnomad.exomes.v4.0.coverage.summary.tsv.bgz"
 
+###################################################### get UKBiobank #######################################################
+
+rule merge_ukb_AN:
+    input:
+        # files = glob.glob("/home/djl34/lab_pd/ukbiobank/data/ac_query/chr{chrom}/ukb*.tsv")
+    output:
+        os.path.join(pd_data_dir, "ukbiobank/500k/chr{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=20000
+    run:
+        with Client() as client:
+            files_list = glob.glob(f"/home/djl34/lab_pd/ukbiobank/data/ac_query/chr{wildcards.chrom}/ukb*.tsv")
+            names_list = ["Chrom", "Pos", "Allele_ref", "Allele", "Filter", "AN", "AC"]
+            df = dd.read_csv(files_list, sep = "\t", names = names_list, dtype={'AC': 'object'})
+            
+            df.to_csv(output[0], index = False, sep = "\t", single_file = True)
+
+rule split_by_variant:
+    input:
+        os.path.join(pd_data_dir, "ukbiobank/500k/chr{chrom}.tsv")
+    output:
+        os.path.join(pd_data_dir, "ukbiobank/500k/split_chr{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=1,
+        mem_mb=5000
+    run:
+        import csv
+        
+        with open(output[0], 'w', newline='') as csvfile:
+            spamwriter = csv.writer(csvfile, delimiter='\t')
+        
+            with open(input[0]) as fd:
+                rd = csv.reader(fd, delimiter="\t")
+            
+                spamwriter.writerow(next(rd))
+                for row in rd:
+                    if "," in row[3]:
+                        count = row[3].count(',')
+                        
+                        for i in range(count + 1):
+                            row_output = row[:3]
+                            row_output.append(row[3].split(",")[i])
+                            row_output.extend(row[4:6])
+                            row_output.append(row[6].split(",")[i])
+                            spamwriter.writerow(row_output)
+                    else:
+                        spamwriter.writerow(row)
+
+              
 ################################################## get zoonomia #######################################################
         
 # rule download_zoonomia_phylop:
@@ -240,7 +306,7 @@ rule bigwig_to_wig:
     shell:
         "bigWigToWig {input} {output}"
         
-rule filter_low_quality_files:
+rule filter_low_quality_files_zoonomia:
     input:
         os.path.join(scratch_dir, "zoonomia/cactus241way.phyloP.wig")
     output:
@@ -458,14 +524,14 @@ rule unzip_spliceai_raw:
 
 rule spliceai_raw_split_by_chr:
     input:
-        vcf = os.path.join(scratch_dir, "downloads/spliceai/spliceai_scores.raw.snv.hg38.vcf.gz"),
+        vcf = os.path.join(pd_data_dir, "spliceai/spliceai_scores.raw.snv.hg38.vcf.gz"),
     output:
         os.path.join(scratch_dir, "downloads/spliceai/spliceai_scores.raw.snv.chrom_{chrom}.hg38.vcf")
     resources:
         partition="short",
         runtime="0-12:00",
-        cpus_per_task=4,
-        mem_mb=16000
+        cpus_per_task=1,
+        mem_mb=4000
     shell:
         "bcftools view -I {input.vcf} -r {wildcards.chrom} -O v -o {output}"
         

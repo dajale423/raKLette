@@ -5,13 +5,14 @@ import sys
 sys.path.insert(0,'/home/djl34/kl_git/scripts')
 from snakefile_imports import *
 
-n = 1
+n = 0
 
 ## function for allocating memory into 
 def get_mem_mb(wildcards, attempt):
     return 10000 + (attempt + n) * 30000
 
 chrom_set = all_chrom_set
+# chrom_set = ["22"]
 
 ##############################################################################################################################
 
@@ -30,7 +31,9 @@ filename_list = [os.path.join(scratch_dir, "whole_genome/ukb_ac/{chrom}/_metadat
 filename_list = [os.path.join(scratch_dir, "whole_genome/AN_interpolate/{chrom}/_metadata"),
                  os.path.join(scratch_dir, "whole_genome/filtered/{chrom}.tsv"),
                  os.path.join(scratch_dir, "whole_genome/filtered_additional/{chrom}.tsv"),
-                os.path.join(KL_data_dir, "whole_genome/filtered_additional/{chrom}.tsv")]
+                 os.path.join(KL_data_dir, "whole_genome/filtered_additional/{chrom}.tsv"),
+                 os.path.join(KL_data_dir, "whole_genome/combined/footprints/{chrom}/_metadata"),
+                 os.path.join(KL_data_dir, "whole_genome/combined/add_gene_info/{chrom}/_metadata")]
 
 
 
@@ -46,6 +49,7 @@ filename_list = [filename.format(chrom = chrom) for filename in filename_list fo
 rule all:
     input:
         filename_list,
+        os.path.join(KL_data_dir, "whole_genome/freq_bins/freq_bin_2_all.tsv"),
         os.path.join(KL_data_dir, "whole_genome/freq_bins/freq_bin_9_all.tsv")
 
 ################################################### add allele count info ####################################################
@@ -653,12 +657,50 @@ rule make_SFS_neutral:
 
                 df_group_pivot.to_csv(output[i], sep = "\t", index = None)
                 i += 1
+
+rule make_SFS_neutral_other_freq_bins:
+    input:
+        os.path.join(KL_data_dir, "whole_genome/freq_bins/{chrom}/_metadata"),
+    output:
+        os.path.join(scratch_dir, "whole_genome/freq_bins/freq_bin_2_{chrom}.tsv"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=1,
+        mem_mb=4000
+    run:
+        with Client() as client:
+                        
+            i = 0
+
+            bin_list = ["Freq_bin_2"]
+            
+            for x in bin_list:
+                
+                df = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+            
+                df = df[["mu", "Neutral", "AF"]]
+                df = df[df["Neutral"] == 1]
+                df[x] = df['AF'].map_partitions(pd.cut, freq_breaks_2, labels = False)
+
+                df = df.compute()
+                df_group = pd.DataFrame(df.groupby(["mu", x])[x].count())
+
+                df_group = df_group.rename({x: "count"}, axis = 1)
+                df_group = df_group.reset_index()
+
+                df_group["count"] = df_group["count"].astype(int)
+                df_group_pivot = df_group.pivot(index='mu', columns=x, values='count')
+                df_group_pivot = df_group_pivot.reset_index()
+
+                df_group_pivot.to_csv(output[i], sep = "\t", index = None)
+                i += 1
                             
 rule combine_9_SFS_neutral:
     input:
-        files = [os.path.join(scratch_dir, "whole_genome/freq_bins/freq_bin_9_" + chrom + ".tsv") for chrom in all_chrom_set]
+        files = [os.path.join(scratch_dir, "whole_genome/freq_bins/freq_bin_{freq_bin}_" + chrom + ".tsv") for chrom in all_chrom_set]
     output:
-        os.path.join(KL_data_dir, "whole_genome/freq_bins/freq_bin_9_all.tsv"),
+        os.path.join(KL_data_dir, "whole_genome/freq_bins/freq_bin_{freq_bin}_all.tsv"),
     resources:
         partition="short",
         runtime="0-1:00",
@@ -667,14 +709,10 @@ rule combine_9_SFS_neutral:
     run:
         with Client() as client:
             
-            df = dd.read_csv(input.files, sep = "\t", dtype={'0.0': 'float64',
-                           '1.0': 'float64', '2.0': 'float64', '3.0': 'float64',
-                           '4.0': 'float64', '5.0': 'float64', '6.0': 'float64',
-                           '7.0': 'float64', '8.0': 'float64'})
-    
+            df = dd.read_csv(input.files, sep = "\t", dtype = 'float64')
             df = df.compute()
-            
-            df_group = df.groupby("mu")['0.0', '1.0', '2.0','3.0','4.0','5.0','6.0','7.0','8.0'].sum().reset_index()
+            column_list = [str(x) for x in range(int(wildcards.freq_bin))]
+            df_group = df.groupby("mu")[column_list].sum().reset_index()
             
             df_group = df_group.set_index('mu')
             sum_list = df_group.sum(axis = 1)
@@ -783,24 +821,65 @@ rule add_dhs:
     
             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
             
-### footprints
-fp_dir = "/home/djl34/lab_pd/data/footprints"
-from dask.dataframe import from_pandas
+# ### footprints
+# fp_dir = "/home/djl34/lab_pd/data/footprints"
+# from dask.dataframe import from_pandas
 
-rule add_footprinting:
+# rule add_footprinting:
+#     input:
+#         rate = os.path.join(scratch_dir, "whole_genome/dhs_core/{chrom}/_metadata"),
+#         fp = os.path.join(KL_data_dir, "footprints/consensus_footprints_and_collapsed_motifs_hg38.bed.gz"),
+#     output:
+#         os.path.join(KL_data_dir, "whole_genome/footprints/{chrom}/_metadata"),
+#     resources:
+#         partition="short",
+#         runtime="0-3:00",
+#         cpus_per_task=5,
+#         mem_mb=get_mem_mb
+#     run:
+#         from dask.distributed import Client
+
+#         with Client() as client:
+        
+#             rate = dd.read_parquet("/".join(input.rate.split("/")[:-1]) + "/")
+            
+#             fp_header = ['Chrom', 'start', 'end', 'identifier', 'mean_signal', 'num_samples', 'num_fps', 'width', 'summit_pos', 'core_start', 'core_end', 'motif_clusters']
+            
+#             fp = pd.read_csv(input.fp, sep = "\t", names = fp_header)
+            
+#             def get_range(start, end):
+#                 return range(start + 1, end + 1)
+
+#             fp["Pos"] = fp.apply(lambda row: get_range(row["start"],row["end"]), axis=1)
+
+#             fp = fp.explode('Pos')
+#             fp["Pos"] = fp["Pos"].astype(int)
+
+#             fp = fp.sort_values("mean_signal").drop_duplicates(subset =["Pos"], keep = 'last')
+            
+#             fp = fp.rename({"num_samples": "footprint_samples", "mean_signal": "footprint_mean_signal", "motif_clusters": "footprint_motif_clusters", "identifier": "footprint_identifier"}, axis = 1)
+            
+#             fp = fp[["Pos", "footprint_mean_signal", "footprint_samples", "footprint_motif_clusters", "footprint_identifier"]]
+            
+#             rate = rate.merge(fp, on = "Pos", how = "left").set_index('index')
+            
+#             rate = rate.repartition(partition_size="3GB")
+            
+#             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = True, compression = "gzip", write_metadata_file = True)
+
+
+rule combined_footprint:
     input:
-        rate = os.path.join(scratch_dir, "whole_genome/dhs_core/{chrom}/_metadata"),
+        rate = os.path.join(KL_data_dir, "whole_genome/freq_bins/{chrom}/_metadata"),
         fp = os.path.join(KL_data_dir, "footprints/consensus_footprints_and_collapsed_motifs_hg38.bed.gz"),
     output:
-        os.path.join(KL_data_dir, "whole_genome/footprints/{chrom}/_metadata"),
+        os.path.join(KL_data_dir, "whole_genome/combined/footprints/{chrom}/_metadata")
     resources:
         partition="short",
-        runtime="0-3:00",
-        cpus_per_task=5,
-        mem_mb=get_mem_mb
+        runtime="0-12:00",
+        cpus_per_task=6,
+        mem_mb=120000
     run:
-        from dask.distributed import Client
-
         with Client() as client:
         
             rate = dd.read_parquet("/".join(input.rate.split("/")[:-1]) + "/")
@@ -809,13 +888,16 @@ rule add_footprinting:
             
             fp = pd.read_csv(input.fp, sep = "\t", names = fp_header)
             
+#             fp["Chrom"] = fp["Chrom"].astype("string")
+            fp = fp[fp["Chrom"] == "chr" + wildcards.chrom]
+            
             def get_range(start, end):
                 return range(start + 1, end + 1)
 
             fp["Pos"] = fp.apply(lambda row: get_range(row["start"],row["end"]), axis=1)
 
             fp = fp.explode('Pos')
-            fp["Pos"] = fp["Pos"].astype(int)
+            fp["Pos"] = fp["Pos"].astype("Int64")
 
             fp = fp.sort_values("mean_signal").drop_duplicates(subset =["Pos"], keep = 'last')
             
@@ -823,37 +905,38 @@ rule add_footprinting:
             
             fp = fp[["Pos", "footprint_mean_signal", "footprint_samples", "footprint_motif_clusters", "footprint_identifier"]]
             
-            rate = rate.merge(fp, on = "Pos", how = "left").set_index('index')
+            rate = rate.merge(fp, on = "Pos", how = "left")
             
             rate = rate.repartition(partition_size="3GB")
             
-            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = True, compression = "gzip", write_metadata_file = True)
-
-
-rule footprint_dhs:
+            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
+            
+rule add_gene_consequence:
     input:
-        rate = os.path.join(KL_data_dir, "whole_genome/neutral/{chrom}/_metadata"),
-        feature = os.path.join(KL_data_dir, "whole_genome/footprints/{chrom}/_metadata")
+        rate = os.path.join(KL_data_dir, "whole_genome/combined/footprints/{chrom}/_metadata"),
+        feature = os.path.join(KL_data_dir, "whole_exome/vep/{chrom}_rate_v5.2_TFBS_correction_whole_exon.tsv")
     output:
-        os.path.join(scratch_dir, "whole_genome/combined/footprints/{chrom}/_metadata")
+        os.path.join(KL_data_dir, "whole_genome/combined/add_gene_info/{chrom}/_metadata")
     resources:
         partition="short",
         runtime="0-12:00",
-        cpus_per_task=5,
-        mem_mb=get_mem_mb
+        cpus_per_task=4,
+        mem_mb=54000
     run:
         with Client() as client:
+            names_list = ['Chrom', 'Pos', 'Allele_ref', 'Allele', 'Consequence', 'Gene', 'Transcript', 'Canonical']
+
+            vep = dd.read_csv(input.feature, sep = "\t", names = names_list, dtype={'Pos': 'Int64'})
+            vep = vep[vep["Canonical"] == "YES"]
+            vep = vep.drop(columns = ["Chrom"])
             
-            rate = dd.read_parquet("/".join(input.rate.split("/")[:-1]) + "/")
-            feature = dd.read_parquet("/".join(input.feature.split("/")[:-1]) + "/")
+            rate = dd.read_parquet(input.rate.split("_metadata")[0])
             
-            feature = feature.drop(['mu'], axis=1)
-                        
-            rate = rate.merge(feature, on = ['Pos', 'Allele_ref', 'Allele'], how = "left")
+            rate = rate.merge(vep, on = ['Pos', 'Allele_ref', 'Allele'], how = "left")
             
             rate = rate.repartition(partition_size="3GB")
             
-            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = True, compression = "gzip", write_metadata_file = True)
+            rate.to_parquet(output[0].split("_metadata")[0], write_index = True, compression = "gzip", write_metadata_file = True)
 
 #############################################################################################################################
 #############################################################################################################################
