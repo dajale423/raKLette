@@ -1,13 +1,15 @@
 import numpy as np
 import scipy as sp
 import scipy.optimize as opt
+import simulation_tools as simt
+import einops
 
 class WinSFS:
     """
     A class for storing mutation rate stratified polymorphism data and 
     performing maximum likelihood inference of the non-decreasing latent SFS.
     """
-    def __init__(self, data, mut_offset):
+    def __init__(self, data, neutral_sfs):
         """
         Initialize the WinSFS object.
         
@@ -17,23 +19,26 @@ class WinSFS:
             The observed polymorphism counts, stratified by mutation rate.
             (M x K) array, where M is the number of mutation rate classes and
             K is the number of frequency bins.
-        mut_offset : array_like
-            The effect of different mutation rate bins on the SFS summarized as multinomial coefficients.
-            (M x K-1)
+        neutral_sfs : array_like
+            The observed neutral SFS polymorphism proportions, stratified by mutation rate.
+            (M x K) array.
         """
         # assert that data and mut_offset are numpy arrays
         assert isinstance(data, np.ndarray)
-        assert isinstance(mut_offset, np.ndarray)
+        assert isinstance(neutral_sfs, np.ndarray)
         # assert that data and mut_offset are 2D arrays
         assert data.ndim == 2
-        assert mut_offset.ndim == 2
+        assert neutral_sfs.ndim == 2
         # assert that data and mut_offset have the same number of rows
-        assert data.shape[0] == mut_offset.shape[0]
+        assert data.shape[0] == neutral_sfs.shape[0]
         # assert that data and mut_offset have the correct number of columns
-        assert data.shape[1] == mut_offset.shape[1] + 1
+        assert data.shape[1] == neutral_sfs.shape[1]
 
+        mut_offset = simt.multinomial_trans(neutral_sfs)
+        
         # rename to match notation in methods, and store
         self.YY = data
+        self.neutral_sfs = neutral_sfs
         self.beta_0 = mut_offset
         # save a second copy of beta_0 with a column of zeros appended at the front
         self.beta_0_0 = np.hstack((np.zeros((self.beta_0.shape[0], 1)), self.beta_0))
@@ -49,6 +54,33 @@ class WinSFS:
         self.alpha_optim = None
         # initialize the fit probabilities inferred from traditional optimization
         self.fit_probs_optim = None
+
+    def neutral_cdf(self, reverse = True):
+        """
+        Compute the cdf of the neutral SFS
+        
+        Parameters
+        ----------
+        reverse : bool
+            Determine whether to compue cdf in reverse (starting from monomorphic vs starting from most common bin)
+        
+        Returns
+        -------
+        cdf: array-like
+            The cdf neutral SFS.
+            (M x K) array.
+        """
+        neutral_sfs_copy = np.copy(self.neutral_sfs)
+        bin_num = self.K
+
+        if reverse:
+            for i in range(1, bin_num):
+                neutral_sfs_copy[:,:i] += einops.repeat(neutral_sfs_copy[:,i], 'h -> h repeat', repeat= i)
+        else:
+            for i in reversed(range(bin_num)):
+                neutral_sfs_copy[:,i+1:] += einops.repeat(neutral_sfs_copy[:,i], 'h -> h repeat', repeat= bin_num - i - 1)
+        
+        return neutral_sfs_copy
 
     def _loglik(self, alpha, YY_samp=None):
         """
@@ -116,35 +148,38 @@ class WinSFS:
                       (1 + ZZ[:, None]), 0)
         return -gradient
     
-    # def ll_expected(self, YY_samp=None):
+    def log_likelihood_ratio_cdf(self, reverse=True):
+        """
+        Compute the expected log-likelihood ratio of the observed polymorphism data given
+        the cdf from neutral expectation.
         
+        Parameters
+        ----------
         
-    #     """
-    #     Compute the expected log-likelihood of the observed polymorphism data given
-    #     the given offset from neutral expectation.
-        
-    #     Parameters
-    #     ----------
-        
-    #     Returns
-    #     -------
-    #     loglik : float
-    #         The log-likelihood of the observed polymorphism data.
-    #     """
-    #     if YY_samp is None:
-    #         YY_samp = self.YY
-    #         nn_samp = self.nn
-    #     else:
-    #         assert YY_samp.shape == self.YY.shape
-    #         nn_samp = np.sum(YY_samp, axis=1)
-        
-    #     # convert alpha to multinomial coefficients
-    #     beta = self.beta_0
-    #     ZZ = np.sum(np.exp(self.beta_0 - beta), 1)
-    #     loglik = np.sum(-nn_samp * np.log1p(ZZ) + np.sum((self.beta_0 - beta) * YY_samp[:, 1:], 1))
-    #     # return the log-likelihood
-        
-    #     return -loglik/np.sum(nn_samp)
+        Returns
+        -------
+        loglik : float
+            The log-likelihood of the observed polymorphism data.
+        """
+        neutral_cdf = self.neutral_cdf(reverse)
+
+        transformed_cdf = np.log(neutral_cdf)
+
+        # calculate tail log liklihood for the observed polymorphism
+        tail_log_lik = einops.einsum(self.YY, transformed_cdf, "i j, i j -> i j").sum()
+
+        # calculate expected log liklihood
+        neutral_expected = einops.einsum(self.neutral_sfs, transformed_cdf, "i j, i j -> i j")
+        neutral_expected = einops.reduce(neutral_expected, 'h w -> h', 'sum')
+        log_lik_expected = einops.einsum(neutral_expected, self.nn, "i , i  -> i ").sum()
+
+        # calculate variance of log likelihood
+        neutral_expected_sq = einops.einsum(self.neutral_sfs, np.square(transformed_cdf), "i j, i j -> i j")
+        neutral_expected_sq = einops.reduce(neutral_expected_sq, 'h w -> h', 'sum')
+        neutral_var = neutral_expected_sq - np.square(neutral_expected) # variance as E[X^2] - E^2
+        log_lik_var = einops.einsum(neutral_var, self.nn, "i , i  -> i ").sum()
+
+        return (tail_log_lik - log_lik_expected)/np.sqrt(log_lik_var)
 
     def ml_optim(self, jac=False, beta_max=100, verbose=True):
         """
@@ -255,3 +290,4 @@ class WinSFS:
         fit_sfs = fit_sfs[fit_sfs>0]
         KL = np.sum(fit_sfs * (np.log(fit_sfs) - np.log(neut_sfs)))
         return KL
+

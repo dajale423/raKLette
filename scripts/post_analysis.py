@@ -65,31 +65,20 @@ def get_n_sites(file_header):
     return int(df.iloc[0, 0])
 
 def freq_bin_to_AF_range(bin_num, short = False):
+    freq_breaks_9 = [-1, 1e-8, 1e-06, 2e-06, 4e-06, 2e-05, 5e-05, 5e-04, 5e-03, 0.5] 
+    frequency = freq_breaks_9[int(bin_num) + 1]
+    
     if bin_num == 0:
         return "Monomorphic"
     elif bin_num == 1:
         if short:
             return "Singleton"
-        return "<1e-05 (Singleton)"
+        return f"<{frequency} (Singleton)"
     elif bin_num == 2:
         if short:
             return "Doubleton"
-        return "<1.7e-05 (doubleton)"
-    elif bin_num == 3:
-        if short:
-            return "Tripleton"
-        return "<2.3e-05 (tripleton)"
-    elif bin_num == 4:
-        return "<3.6e-05"
-    elif bin_num == 5:
-        return "<8e-05"
-    elif bin_num == 6:
-        return "<5e-04"
-    elif bin_num == 7:
-        return "<5e-03"
-    elif bin_num == 8:
-        return "<5e-02"
-    elif bin_num == 9:
-        return "<0.5"
+        return f"<{frequency} (doubleton)"
+    else:
+        return f"<{frequency}"
     
     

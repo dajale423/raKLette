@@ -9,7 +9,7 @@
 #SBATCH --mail-type=ALL                    # ALL email notification type
 #SBATCH --mail-user=daniel_lee@g.harvard.edu  # Email to which notifications will be sent
 
-rm slurm*
+# rm slurm*
 snakemake --unlock
 
 command='snakemake --cluster "sbatch -c {resources.cpus_per_task} -t {resources.runtime} -p {resources.partition} --mem={resources.mem_mb}" --rerun-incomplete --latency-wait 30'
