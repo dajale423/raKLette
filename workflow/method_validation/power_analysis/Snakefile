@@ -1,0 +1,65 @@
+## this is to analyze per gene on synonymous, lof, and missense
+
+import sys
+sys.path.insert(0,'/home/djl34/kl_git/scripts')
+from snakefile_imports import *
+
+include: "../../rules/inference.smk"
+
+output_dir = "/home/djl34/kl_git/results"
+
+
+##############################################################################################################################   
+
+selection_list = [0.0, 0.1, 0.01, 0.001]
+mu_list = [2e-09, 6e-09, 2e-08, 6e-08, 2e-07]
+bin_list = [2, 9]
+
+filename_list = [os.path.join(output_dir, "SFS_output_v2.6.1_recurrent_slow/gao/multinomial_1000000/multinomial_SFS_Slinear__-{selection}_mu_{mu}_bin_{bin_number}.npy")]
+
+input_list = [input_filename.format(mu = mu, selection = selection, bin_number = bin_number) for input_filename in filename_list for mu in mu_list for selection in selection_list for bin_number in bin_list]
+
+rule all:
+    input:
+        input_list,
+
+########################################################### processing data ############################################################
+
+rule simulated_SFS_to_multinomial:
+    input:
+        os.path.join(output_dir, "SFS_output_v2.6.1_recurrent_slow/gao/sample_1000000/SFS_gao_2N_20000_Slinear__-{selection}_h_0.5_mu_{mu}_L_5.0_growth_0.0057_growthbeta_1.122_scalingfactor_1.0.tsv")
+    output:
+        os.path.join(output_dir, "SFS_output_v2.6.1_recurrent_slow/gao/multinomial_1000000/multinomial_SFS_Slinear__-{selection}_mu_{mu}_bin_{bin_number}.npy")
+    resources:
+        partition="short",
+        runtime="0-0:10",
+        cpus_per_task=1,
+        mem_mb=1000
+    run:
+        filename = input[0]
+        bin_num = int(wildcards.bin_number)
+
+        df = pd.read_csv(filename, sep = "\t")
+        AN = 1000000        
+        total_sites_num = df["Number"].sum()
+        
+        if bin_num == 2:
+            monomorphic_sites = df[df["MAC"] == 0]["Number"].sum()
+            polymorphic_sites = df[df["MAC"] > 0]["Number"].sum()
+            
+            array = [monomorphic_sites, polymorphic_sites]/total_sites_num        
+        elif bin_num == 9:
+            array = []
+            for i in range(bin_num):
+                lower = freq_breaks_9[i] * AN
+                upper = freq_breaks_9[i + 1] * AN
+        
+                sites = df[(df["MAC"] > lower) & (df["MAC"] <= upper) ]["Number"].sum()
+                array.append(sites)
+        
+            array = array/total_sites_num
+        else:
+            print("bin number not included")
+
+        with open(output[0], 'wb') as f:
+            np.save(f, array)
