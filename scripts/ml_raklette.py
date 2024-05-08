@@ -70,6 +70,10 @@ class WinSFS:
             The cdf neutral SFS.
             (M x K) array.
         """
+
+        # if reverse, 0 bin equals 1
+        # if not reverse most common bin equals 1
+        
         neutral_sfs_copy = np.copy(self.neutral_sfs)
         bin_num = self.K
 
@@ -147,39 +151,98 @@ class WinSFS:
                       np.cumsum(np.exp(self.beta_0 - beta)[:,::-1], 1)[:,::-1] / 
                       (1 + ZZ[:, None]), 0)
         return -gradient
-    
-    def log_likelihood_ratio_cdf(self, reverse=True):
+
+    def gnocchi(self):
         """
-        Compute the expected log-likelihood ratio of the observed polymorphism data given
-        the cdf from neutral expectation.
+        Compute the gnocchi estimate
         
         Parameters
         ----------
         
         Returns
         -------
-        loglik : float
-            The log-likelihood of the observed polymorphism data.
+        zscore : float
+            The z-score of gnocchi.
         """
-        neutral_cdf = self.neutral_cdf(reverse)
+        #binary sfs for gnocchi
+        assert self.neutral_sfs.shape[1] == 2
 
-        transformed_cdf = np.log(neutral_cdf)
+        polymorphic_p = np.copy(self.neutral_sfs)
+        polymorphic_p[:,0] = 0
+        return -1 * self.zscore(polymorphic_p)
+
+    def extrainsight(self):
+        """
+        Compute the ExtRaINSIGHT estimate from dukler et al
+        
+        Parameters
+        ----------
+        
+        Returns
+        -------
+        zscore : float
+            The z-score of gnocchi.
+        """
+        #binary sfs for extrainsight
+        assert self.neutral_sfs.shape[1] == 2
+
+        monomorphic_p = np.copy(self.neutral_sfs)
+        monomorphic_p[:,1] = 0
+        
+        return self.zscore(monomorphic_p)
+
+    def zscore_cdf(self, transformation = "log", reverse=True):
+        """
+        Compute the z score of some transformation of distribution from neutral expectation.
+        
+        Parameters
+        ----------
+        
+        Returns
+        -------
+        zscore : float
+            The z-score of cdf per-site.
+        """
+
+        neutral_dist = self.neutral_cdf(reverse)
+        
+        if transformation == "log":
+            transformed_dist = np.log(neutral_dist)
+        elif transformation == "none":
+            transformed_dist = neutral_dist
+        else:
+            print("transformation is not included")
+
+        return self.zscore(transformed_dist)
+    
+    def zscore(self, distribution):
+        """
+        Compute the z score of some transformation of distribution from neutral expectation.
+        
+        Parameters
+        ----------
+        
+        Returns
+        -------
+        zscore : float
+            The z-score of some distribution per-site.
+        """
 
         # calculate tail log liklihood for the observed polymorphism
-        tail_log_lik = einops.einsum(self.YY, transformed_cdf, "i j, i j -> i j").sum()
+        data = einops.einsum(self.YY, distribution, "i j, i j -> i j").sum()
 
         # calculate expected log liklihood
-        neutral_expected = einops.einsum(self.neutral_sfs, transformed_cdf, "i j, i j -> i j")
+        neutral_expected = einops.einsum(self.neutral_sfs, distribution, "i j, i j -> i j")
         neutral_expected = einops.reduce(neutral_expected, 'h w -> h', 'sum')
-        log_lik_expected = einops.einsum(neutral_expected, self.nn, "i , i  -> i ").sum()
+        neutral_expected_sum = einops.einsum(neutral_expected, self.nn, "i , i  -> i ").sum()
 
         # calculate variance of log likelihood
-        neutral_expected_sq = einops.einsum(self.neutral_sfs, np.square(transformed_cdf), "i j, i j -> i j")
+        neutral_expected_sq = einops.einsum(self.neutral_sfs, np.square(distribution), "i j, i j -> i j")
         neutral_expected_sq = einops.reduce(neutral_expected_sq, 'h w -> h', 'sum')
         neutral_var = neutral_expected_sq - np.square(neutral_expected) # variance as E[X^2] - E^2
-        log_lik_var = einops.einsum(neutral_var, self.nn, "i , i  -> i ").sum()
+        neutral_var_sum = einops.einsum(neutral_var, self.nn, "i , i  -> i ").sum()
 
-        return (tail_log_lik - log_lik_expected)/np.sqrt(log_lik_var)
+        return (data - neutral_expected_sum)/np.sqrt(neutral_var_sum)
 
     def ml_optim(self, jac=False, beta_max=100, verbose=True):
         """
