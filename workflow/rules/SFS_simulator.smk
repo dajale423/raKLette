@@ -20,7 +20,7 @@ from others import round_sig
 
 output_dir = "/home/djl34/kl_git/results"
 code_dir = "/home/djl34/kl_git/scripts"
-simulator = "simDoSe_v2.6.3_Uindex.py"
+simulator = code_dir + "/simDoSe_v2.6.3_Uindex.py"
 
 # for standard growth rate fit to gnomADv2.1.1 data
 standard_growth_rate = True
@@ -86,42 +86,6 @@ if demography == "gao":
 else:
     file_header = ""
 
-# if demography in ["gao"]:
-#     for mu in mu_list:
-#         for seed in seed_list:
-#             for growth in growth_list:
-#                 for scaling in scaling_list:
-#                     for selection in selection_list:
-#                         if len(growth_beta_list) > 0:
-#                             for growth_beta in growth_beta_list:                     
-#                                 output_list.append(file_header+ "_Slinear__-"+ str(selection) +"_h_0.5_mu_" + 
-#                                        str(mu) + "_L_5.0" + "_growth_" + str(growth) +  "_growthbeta_" + str(growth_beta) +
-#                                            "_scalingfactor_" + str(scaling) 
-#                                        + "_seed_" + str(seed_num) +".tsv")
-#                         else:
-#                             output_list.append(file_header + "_Slinear__-0.0_h_0.5_mu_" + 
-#                                                str(mu) + "_L_5.0" + "_growth_" + str(growth) + "_scalingfactor_" + str(scaling) 
-#                                                + "_seed_" + str(seed) + ".tsv")
-    
-# if demography == "equilibrium":
-#     for sample_size in sample_size_list:
-#         for selection in selection_list:
-#             for seed in seed_list:
-#                 for mu in mu_list:
-#                     output_list.append("SFS_equilibrium_2N_"+ str(sample_size) +"_Slinear__-" + str(selection) + "_h_0.5_mu_" + str(mu) + "_L_" + L +"_scalingfactor_1" + "_seed_" + str(seed) + ".tsv")
-                    
-
-# add = ""                    
-# if demography == "gaussian":
-#     add = "_growth"
-                   
-# if output_sample_list:
-#     output_list_sample = []
-#     for sample_expected in sample_size_list:
-#         output_list_sample.extend([x.split(".tsv")[0] + "_sample_"+ str(sample_expected) + "_unfolded.tsv" for x in output_list])
-# else:
-#     output_list_sample = []
-
 filename = os.path.join(output_dir, "SFS_output_v2.6.1_recurrent_slow/gao/raw_SFS/SFS_gao_2N_20000_Slinear__-{selection}_h_0.5_mu_{mu}_L_5.0_growth_0.0057_growthbeta_1.122_scalingfactor_1.0_seed_{seed_num}.tsv")
 
 input_list = [filename.format(mu = mu, selection = selection, seed_num = seed_num) for mu in mu_list for selection in selection_list for seed_num in seed_list]
@@ -130,9 +94,9 @@ filename = os.path.join(output_dir, "SFS_output_v2.6.1_recurrent_slow/gao/sample
 
 input_list = [filename.format(mu = mu, selection = selection) for mu in mu_list for selection in selection_list]
 
-rule all:
-    input:
-        input_list
+# rule all:
+#     input:
+#         input_list
 #         [os.path.join(output_dir, recurrent_directory + "/" + demography + add +"/raw_SFS/"+ file) for file in output_list_sample]
     
 
@@ -158,6 +122,16 @@ def get_final_2N(demography, growth, mu, growth_beta, seed):
 import os.path
             
 def get_sample_sfs(demography, selection, growth, mu, growth_beta, seed_list, sample_size, unfolded = False):
+
+
+    directory = "/home/djl34/kl_git/results/SFS_output_v2.6.1_recurrent_slow/"+ demography +"/raw_SFS/"
+
+    if demography == "gao":
+        file_header = "SFS_gao_2N_20000_"
+    
+    file_header = file_header + "Slinear__-" + selection + "_h_0.5_mu_" + str(mu) 
+    file_header = file_header + "_L_5.0_growth_" + str(growth) + "_growthbeta_" + str(growth_beta)
+    file_header = file_header + "_scalingfactor_1.0_seed_"
     
     sample_size = int(sample_size)
     growth = float(growth)
@@ -221,7 +195,7 @@ rule gao_syn_gnomADv2_growthbeta:
         partition="short",
         runtime="0-12:00",
         cpus_per_task=1,
-        mem_mb=5000
+        mem_mb=1000
     shell:
         "python {simulator} -U {wildcards.mu} -L 100000 -S -{wildcards.selection} -H 0.5 -D gao --recurrent 1 --Rkernel slow --linearU --seed {wildcards.seed_num} --linearS 1 --samplesize 113770 --scaling-factor {wildcards.scaling} -G {wildcards.growth} --growth_beta {wildcards.growth_beta}"
         
@@ -234,10 +208,10 @@ rule gao_syn_gnomADv2_growthbeta_get_sample:
         partition="short",
         runtime="0-12:00",
         cpus_per_task=1,
-        mem_mb=5000
+        mem_mb=1000
     run:
         sfs_sample = get_sample_sfs("gao", wildcards.selection, wildcards.growth, wildcards.mu, wildcards.growth_beta, range(int(10)), wildcards.sample_size)
-        sfs_sample.to_csv(ouput[0], sep = "\t", index = None)
+        sfs_sample.to_csv(output[0], sep = "\t", index = None)
         
 # rule gao_syn_gnomADv2_growthbeta_get_sample_unfolded:
 #     input:

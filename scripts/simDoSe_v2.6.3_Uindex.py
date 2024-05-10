@@ -385,7 +385,7 @@ def mutation_step_recurrent_v3(mu_temp, L_temp, popsize_temp, counts_temp,foutpu
     
     # count segregating sites
     seg_sites_temp = counts_temp.size
-    monomorphic_sites=np.int((L_temp-seg_sites_temp))
+    monomorphic_sites=int((L_temp-seg_sites_temp))
     if monomorphic_sites==0:
         new_mutations=np.array([])
 #    elif monomorphic_sites==1:
@@ -421,7 +421,7 @@ def mutation_step_recurrent_vSLOW(mu_temp, L_temp, popsize_temp, counts_temp,fou
     
     # count segregating sites
     seg_sites_temp = counts_temp.size
-    monomorphic_sites=np.int((L_temp-seg_sites_temp))
+    monomorphic_sites=int((L_temp-seg_sites_temp))
     if monomorphic_sites==0:
         new_mutations=np.array([])
 #    elif monomorphic_sites==1:
@@ -459,7 +459,7 @@ def mutation_step_recurrent_vMultinomial(mu_temp, L_temp, popsize_temp, counts_t
     
     # count segregating sites
     seg_sites_temp = counts_temp.size
-    monomorphic_sites=np.int((L_temp-seg_sites_temp))
+    monomorphic_sites=int((L_temp-seg_sites_temp))
     if monomorphic_sites==0:
         new_mutations=np.array([])
     elif monomorphic_sites<seg_sites_temp:

@@ -4,14 +4,14 @@ import sys
 sys.path.insert(0,'/home/djl34/kl_git/scripts')
 from snakefile_imports import *
 
-include: "../../rules/inference.smk"
+include: "../../rules/SFS_simulator.smk"
 
 output_dir = "/home/djl34/kl_git/results"
 
 
 ##############################################################################################################################   
 
-selection_list = [0.0, 0.1, 0.01, 0.001]
+selection_list = [0.0, 0.1, 0.03, 0.01, 0.003, 0.001]
 mu_list = [2e-09, 6e-09, 2e-08, 6e-08, 2e-07]
 bin_list = [2, 9]
 

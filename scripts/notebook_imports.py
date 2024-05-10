@@ -9,6 +9,9 @@ from dask.distributed import Client
 import seaborn as sns
 import matplotlib.pyplot as plt
 
+import einops
+import scipy
+
 sys.path.insert(0,'/home/djl34/lab_pd/bin')
 import genomic
 
