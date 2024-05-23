@@ -817,34 +817,56 @@ rule calculate_p_2:
 #############################################################################################################################
 phastcons_dir = "/n/data2/hms/dbmi/sunyaev/lab/igvf/zoonomia_phastcons_primates"
 
+rule unzip_zoonomia_phastcons_primates:
+    input:
+        os.path.join(phastcons_dir, "chr{chrom}.bed.gz")
+    output:
+        os.path.join(scratch_dir, "chr{chrom}.bed"),
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=1,
+        mem_mb=3000
+    shell:
+        "gunzip -c {input} > {output}"
+
 rule add_zoonomia_phastcons_primates:
     input:
         rate = os.path.join(KL_data_dir, "whole_genome/p/{chrom}/_metadata"),
-        zoo = os.path.join(phastcons_dir, "chr{chrom}.bed.gz")
+        zoo = os.path.join(scratch_dir, "chr{chrom}.bed")
     output:
         os.path.join(KL_data_dir, "whole_genome/zoonomia_phastcons_primates/{chrom}/_metadata"),
     resources:
         partition="short",
         runtime="0-12:00",
-        cpus_per_task=2,
-        mem_mb=24000
+        cpus_per_task=1,
+        mem_mb=28000
     run:
-        from dask.distributed import Client
-
         with Client() as client:
+            filename = input.rate
             rate = dd.read_parquet(filename.split("_metadata")[0])
 
-            columns = ["Chrom", "chromStart", "chromEnd", "name", "Zoonomia_phastcons_primates"]
-            zoo = pd.read_csv(input.zoo, names = columns, sep = "\t")
+            columns = ["Chrom", "Pos", "chromEnd", "name", "Zoonomia_phastcons_primates"]
+            zoo = dd.read_csv(input.zoo, names = columns, sep = "\t", usecols=["Pos", "Zoonomia_phastcons_primates"],
+                  dtype={'Pos': 'Int64', 'Zoonomia_phastcons_primates': "float"}, blocksize=100e6)
 
-            zoo = zoo.rename({"chromStart": "Pos"}, axis = 1)
-            zoo.drop(columns=['Chrom', 'chromEnd', 'name'], inplace = True)
-            zoo_dict = zoo.to_dict()
+            print("Number of partitions: ", zoo.npartitions)
+            zoo = zoo.set_index("Pos")
 
-            rate["Zoonomia_phastcons_primates"] = rate.Pos.map_partitions(lambda x: zoo_dict['Zoonomia_phastcons_primates'][x])
-            rate = rate.repartition(partition_size="3GB")
-
-            rate.to_parquet(output[0].split("_metadata")[0], write_index = True, compression = "gzip", write_metadata_file = True)
+            #rather than merging, try dict
+            # zoo = zoo.set_index("Pos")
+            # zoo_dict = zoo.to_dict()
+            # rate["Zoonomia_phastcons_primates"] = rate.Pos.map_partitions(lambda x: zoo_dict['Zoonomia_phastcons_primates'][x], 
+            #                                                               meta=pd.Series(dtype="float64"))
+            
+            
+            # zoo["Pos"] = zoo["Pos"].astype('Int64')
+            # zoo_ddf = from_pandas(zoo, chunksize=36520314)
+            rate = rate.merge(zoo, how = "left", right_index = True, left_on = "Pos")
+            
+            rate = rate.repartition(partition_size="1GB")
+            
+            rate.to_parquet(output[0].split("_metadata")[0], write_index = False, compression = "gzip", write_metadata_file = True)
 
 #############################################################################################################################
 #############################################################################################################################
