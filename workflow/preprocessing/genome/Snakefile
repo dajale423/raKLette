@@ -13,7 +13,7 @@ def get_mem_mb(wildcards, attempt):
 
 include: "/home/djl34/kl_git/workflow/preprocessing/download/Snakefile"
 chrom_set = all_chrom_set
-# chrom_set = ["22"]
+# chrom_set = range(1, 7)
 
 ##############################################################################################################################
 
@@ -37,7 +37,8 @@ chrom_set = all_chrom_set
 
 filename_list = [os.path.join(scratch_dir, "whole_genome/p_9/{chrom}/_metadata"),
                  os.path.join(KL_data_dir, "whole_genome/p/{chrom}/_metadata"),
-                 os.path.join(KL_data_dir, "whole_genome/zoonomia_phastcons_primates/{chrom}/_metadata")]
+                 os.path.join(KL_data_dir, "whole_genome/zoonomia_phastcons_primates/{chrom}/_metadata"),
+                 os.path.join(KL_data_dir, "whole_genome/phylop/{chrom}/_metadata")]
 
 
 ## for epigenetic features
@@ -767,9 +768,55 @@ rule calculate_p:
 
             rate.to_parquet(output[0].split("_metadata")[0], write_index = True, compression = "gzip", write_metadata_file = True)
 
-rule calculate_p_2:
+rule calculate_p_reverse_log:
     input:
         rate = os.path.join(scratch_dir, "whole_genome/p_9/{chrom}/_metadata"),
+        neutral_sfs_9 = os.path.join(KL_data_dir, "whole_genome/freq_bins/freq_bin_9_all.tsv"),
+        # neutral_sfs_2 = os.path.join(KL_data_dir, "whole_genome/freq_bins/freq_bin_2_all.tsv"),
+    output:
+        os.path.join(scratch_dir, "whole_genome/p_9_reverse_log/{chrom}/_metadata"),
+    resources:
+        partition="short",
+        runtime="0-10:00",
+        cpus_per_task=2,
+        mem_mb=30000
+    run:
+        with Client() as client:
+            
+            filename = input.rate
+            rate = dd.read_parquet(filename.split("_metadata")[0])
+            rate["Freq_bin_9"] = rate["Freq_bin_9"].astype(int)
+            rate["Freq_bin_10"] = rate["Freq_bin_10"].astype(int)
+
+            # don't put it in for loop b/c it is in dask
+            # first start with bin_number 9
+            filename = input.neutral_sfs_9
+            neutral_sfs = pd.read_csv(filename, sep = "\t")
+            neutral_sfs = neutral_sfs.drop(columns = ["mu", "sum"]).to_numpy()
+            p_calculator_9 = mlr.multinomial_SFS_p(neutral_sfs, transformation = "log", reverse = True)
+
+            bin_number = "9_reverse_log"
+
+            def get_p(df):
+                return p_calculator_9.get_p(df["mu_index"], df[f"Freq_bin_9"])
+
+            rate[f"p_{bin_number}"] = rate.map_partitions(get_p)
+            # rate[f"p_{bin_number}"] = rate.apply(lambda x : p_calculator_9.get_p(x["mu_index"], x[f"Freq_bin_{bin_number}"]), axis = 1)
+
+            rate[f"E[p_{bin_number}]"] = rate.mu_index.map_partitions(lambda x: p_calculator_9.get_expected_p(x))
+            rate[f"Var[p_{bin_number}]"] = rate.mu_index.map_partitions(lambda x: p_calculator_9.get_var_p(x))
+            
+            # rate[f"E[p_{bin_number}]"] = rate.apply(lambda x : p_calculator_9.get_expected_p(x["mu_index"]), axis = 1)
+            # rate[f"Var[p_{bin_number}]"] = rate.apply(lambda x : p_calculator_9.get_var_p(x["mu_index"]), axis = 1)
+                    
+            rate = rate.repartition(partition_size="3GB")
+
+            rate.to_parquet(output[0].split("_metadata")[0], write_index = True, compression = "gzip", write_metadata_file = True)
+
+
+rule calculate_p_2:
+    input:
+        rate = os.path.join(scratch_dir, "whole_genome/p_9_reverse_log/{chrom}/_metadata"),
         # neutral_sfs_9 = os.path.join(KL_data_dir, "whole_genome/freq_bins/freq_bin_9_all.tsv"),
         neutral_sfs_2 = os.path.join(KL_data_dir, "whole_genome/freq_bins/freq_bin_2_all.tsv"),
     output:
@@ -815,6 +862,10 @@ rule calculate_p_2:
 
 #############################################################################################################################
 #############################################################################################################################
+
+
+####### add phastcons
+
 phastcons_dir = "/n/data2/hms/dbmi/sunyaev/lab/igvf/zoonomia_phastcons_primates"
 
 rule unzip_zoonomia_phastcons_primates:
@@ -853,20 +904,46 @@ rule add_zoonomia_phastcons_primates:
             print("Number of partitions: ", zoo.npartitions)
             zoo = zoo.set_index("Pos")
 
-            #rather than merging, try dict
-            # zoo = zoo.set_index("Pos")
-            # zoo_dict = zoo.to_dict()
-            # rate["Zoonomia_phastcons_primates"] = rate.Pos.map_partitions(lambda x: zoo_dict['Zoonomia_phastcons_primates'][x], 
-            #                                                               meta=pd.Series(dtype="float64"))
-            
-            
-            # zoo["Pos"] = zoo["Pos"].astype('Int64')
-            # zoo_ddf = from_pandas(zoo, chunksize=36520314)
             rate = rate.merge(zoo, how = "left", right_index = True, left_on = "Pos")
             
             rate = rate.repartition(partition_size="1GB")
             
             rate.to_parquet(output[0].split("_metadata")[0], write_index = False, compression = "gzip", write_metadata_file = True)
+
+
+##### add phyloP
+#maximum is 8.903
+#minimum is -20
+rule add_zoonomia:
+    input:
+        rate = os.path.join(KL_data_dir, "whole_genome/zoonomia_phastcons_primates/{chrom}/_metadata"),
+        zoo = os.path.join(KL_data_dir, "zoonomia/cactus241way/cactus241way.phyloP_chr{chrom}.wig")
+    output:
+        os.path.join(KL_data_dir, "whole_genome/phylop/{chrom}/_metadata"),
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=2,
+        mem_mb=100000
+    run:
+        from dask.distributed import Client
+
+        with Client() as client:
+            filename = input.rate
+            rate = dd.read_parquet(filename.split("_metadata")[0])
+
+            zoo = pd.read_csv(input.zoo, sep = "\t", names = ["Pos", "phyloP"], dtype={'Pos': 'Int64', 'phyloP': 'float64'})
+#             zoo = zoo.repartition(partition_size="1GB")
+
+            rate = rate.merge(zoo, on = "Pos", how = "left")
+
+#            rate["phyloP"] = rate["phyloP"].fillna(0)
+
+            rate = rate.repartition(partition_size="1GB")
+
+            rate.to_parquet(output[0].split("_metadata")[0], write_index = False, compression = "gzip", write_metadata_file = True)
+
+            
 
 #############################################################################################################################
 #############################################################################################################################
@@ -1258,38 +1335,6 @@ rule add_enhancer_module:
             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
             
 ####################################################### add features #######################################################
-###zoonomia phyloP
-
-#maximum is 8.903
-#minimum is -20
-rule add_zoonomia:
-    input:
-        rate = os.path.join(KL_data_dir, "whole_genome/exon/{chrom}/_metadata"),
-        zoo = os.path.join(KL_data_dir, "zoonomia/cactus241way/cactus241way.phyloP_chr{chrom}.wig")
-    output:
-        os.path.join(scratch_dir, "whole_genome/phylop/{chrom}/_metadata"),
-    resources:
-        partition="short",
-        runtime="0-12:00",
-        cpus_per_task=5,
-        mem_mb=get_mem_mb
-    run:
-        from dask.distributed import Client
-
-        with Client() as client:
-            rate = dd.read_parquet("/".join(input.rate.split("/")[:-1]) + "/")
-
-            zoo = pd.read_csv(input.zoo, sep = "\t", names = ["Pos", "phyloP"], dtype={'Pos': 'int', 'phyloP': 'float64'})
-#             zoo = zoo.repartition(partition_size="1GB")
-
-            rate = rate.merge(zoo, on = "Pos", how = "left")
-
-            rate["phyloP"] = rate["phyloP"].fillna(0)
-            rate["phyloP_pos"] = rate["phyloP"].where(rate["phyloP"] > 0, 0)
-
-            rate = rate.repartition(partition_size="3GB")
-
-            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
 
             
 # rule normalize_zoonomia:
@@ -1426,251 +1471,3 @@ rule add_nonsense_mutations:
 #             rate = rate.merge(df, on = ["TSS_Gene"], how = "left")
 
 #             rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
-
-############################################## bin by allele frequency ##############################################
-            
-freq_breaks_5_bins = [-1, 1e-8, 0.00005, 0.0005, 0.05, 0.5]
-
-#AN for gnomAD v3.1 is 152312, half is 76156
-
-rule make_5bins:
-    input:
-        os.path.join(scratch_dir, "{header}/{chrom}/_metadata"),
-    output:
-        os.path.join(scratch_dir, "{header}/5_bins/{chrom}/_metadata"),
-    resources:
-        partition="short",
-        runtime="0-12:00",
-        cpus_per_task=5,
-        mem_mb=get_mem_mb
-    run:
-        with Client() as client:
-            
-            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/part.*.parquet")
-            
-            rate["Freq_bin_5"] = rate['MAF'].map_partitions(pd.cut, freq_breaks_5_bins, labels = False)
-            
-            rate = rate.repartition(partition_size="3GB")
-
-            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
-            
-        
-
-rule make_5bins_SFS_neutral:
-    input:
-        os.path.join(scratch_dir, "{header}/5_bins/{chrom}/_metadata"),
-    output:
-        os.path.join(scratch_dir, "{header}/5_bins/{chrom}.tsv"),
-    resources:
-        partition="short",
-        runtime="0-12:00",
-        cpus_per_task=5,
-        mem_mb=get_mem_mb
-    run:
-        with Client() as client:
-            
-            df = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/part.*.parquet")
-            
-            df = df[["mu_newbin", "Freq_bin_5", "Neutral"]]
-            df = df[df["Neutral"] == 1]
-            df = df.compute()
-            
-            df["mu"] = df["mu_newbin"]
-
-            df_group = pd.DataFrame(df.groupby(["mu", "Freq_bin_5"])["Freq_bin_5"].count())
-
-            df_group = df_group.rename({"Freq_bin_5": "count"}, axis = 1)
-
-            df_group = df_group.reset_index()
-
-            df_group["count"] = df_group["count"].astype(int)
-
-            df_group_pivot = df_group.pivot(index='mu', columns='Freq_bin_5', values='count')
-            
-            df_group_pivot = df_group_pivot.reset_index()
-            
-            df_group_pivot.to_csv(output[0], sep = "\t", index = None)            
-
-rule make_adaptive_SFS_neutral:
-    input:
-        os.path.join(scratch_dir, "{header}/adaptive_bins/{chrom}/_metadata"),
-    output:
-        os.path.join(scratch_dir, "{header}/adaptive_bins/{chrom}.tsv"),
-    resources:
-        partition="short",
-        runtime="0-12:00",
-        cpus_per_task=5,
-        mem_mb=get_mem_mb
-    run:
-        with Client() as client:
-            
-            df = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/part.*.parquet")
-            
-            df = df[["mu_newbin", "Freq_bin_adaptive", "Neutral"]]
-            df = df[df["Neutral"] == 1]
-            df = df.compute()
-            
-            df["mu"] = df["mu_newbin"]
-
-            df_group = pd.DataFrame(df.groupby(["mu", "Freq_bin_adaptive"])["Freq_bin_adaptive"].count())
-
-            df_group = df_group.rename({"Freq_bin_adaptive": "count"}, axis = 1)
-
-            df_group = df_group.reset_index()
-
-            df_group["count"] = df_group["count"].astype(int)
-
-            df_group_pivot = df_group.pivot(index='mu', columns='Freq_bin_adaptive', values='count')
-            
-            df_group_pivot = df_group_pivot.reset_index()
-            
-            df_group_pivot.to_csv(output[0], sep = "\t", index = None)
-            
-rule combine_5bins_SFS_neutral:
-    input:
-        files = [os.path.join(scratch_dir, "{header}/5_bins/" + chrom + ".tsv") for chrom in chrom_set]
-    output:
-        os.path.join(KL_data_dir, "{header}/5_bins/all.tsv"),
-    resources:
-        partition="short",
-        runtime="0-12:00",
-        cpus_per_task=5,
-        mem_mb=get_mem_mb
-    run:
-        with Client() as client:
-            
-            df = dd.read_csv(input.files, sep = "\t", dtype={'0.0': 'float64',
-                           '1.0': 'float64',
-                           '2.0': 'float64',
-                           '3.0': 'float64',
-                           '4.0': 'float64'})
-    
-            df = df.compute()
-            
-            df_group = df.groupby("mu")['0.0', '1.0', '2.0', '3.0', '4.0'].sum().reset_index()
-            
-            df_group = df_group.set_index('mu')
-            sum_list = df_group.sum(axis = 1)
-            df_group = df_group.div(df_group.sum(axis=1), axis=0)
-            df_group["sum"] = sum_list
-            df_group = df_group.reset_index()
-            
-            df_group.to_csv(output[0], sep = "\t", index = None)
-            
-rule combine_adaptive_SFS_neutral:
-    input:
-        files = [os.path.join(scratch_dir, "{header}/adaptive_bins/" + chrom + ".tsv") for chrom in chrom_set]
-    output:
-        os.path.join(KL_data_dir, "{header}/adaptive_bins/all.tsv"),
-    resources:
-        partition="short",
-        runtime="0-12:00",
-        cpus_per_task=5,
-        mem_mb=get_mem_mb
-    run:
-        with Client() as client:
-            
-            df = dd.read_csv(input.files, sep = "\t", dtype={'0.0': 'float64',
-                           '1.0': 'float64', '2.0': 'float64', '3.0': 'float64',
-                           '4.0': 'float64', '5.0': 'float64', '6.0': 'float64',
-                           '7.0': 'float64', '8.0': 'float64', '9.0': 'float64'})
-    
-            df = df.compute()
-            
-            df_group = df.groupby("mu")['0.0', '1.0', '2.0','3.0','4.0','5.0','6.0','7.0','8.0','9.0'].sum().reset_index()
-            
-            df_group = df_group.set_index('mu')
-            sum_list = df_group.sum(axis = 1)
-            df_group = df_group.div(df_group.sum(axis=1), axis=0)
-            df_group["sum"] = sum_list
-            df_group = df_group.reset_index()
-            
-            df_group.to_csv(output[0], sep = "\t", index = None)
-            
-freq_breaks_2_bins = [-1, 1e-8, 0.5]
-
-rule make_2bins:
-    input:
-        os.path.join(scratch_dir, "whole_genome/nonsense/{chrom}/_metadata"),
-    output:
-        os.path.join(scratch_dir, "whole_genome/nonsense/2_bins/{chrom}/_metadata"),
-    resources:
-        partition="short",
-        runtime="0-12:00",
-        cpus_per_task=5,
-        mem_mb=get_mem_mb
-    run:
-        with Client() as client:
-            
-            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/part.*.parquet")
-            
-            rate["Freq_bin_2"] = rate['MAF'].map_partitions(pd.cut, freq_breaks_2_bins, labels = False)
-            
-            rate = rate.repartition(partition_size="3GB")
-
-            rate.to_parquet("/".join(output[0].split("/")[:-1]), write_index = False, compression = "gzip", write_metadata_file = True)
-            
-rule make_2bins_SFS_neutral:
-    input:
-        os.path.join(scratch_dir, "whole_genome/nonsense/2_bins/{chrom}/_metadata"),
-    output:
-        os.path.join(scratch_dir, "whole_genome/nonsense/2_bins/{chrom}.tsv"),
-    resources:
-        partition="short",
-        runtime="0-12:00",
-        cpus_per_task=5,
-        mem_mb=get_mem_mb
-    run:
-        with Client() as client:
-            
-            df = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/part.*.parquet")
-            
-            df = df[["mu_newbin", "Freq_bin_2", "Neutral"]]
-            df = df[df["Neutral"] == 1]
-            df = df.compute()
-            
-            df["mu"] = df["mu_newbin"]
-
-            df_group = pd.DataFrame(df.groupby(["mu", "Freq_bin_2"])["Freq_bin_2"].count())
-
-            df_group = df_group.rename({"Freq_bin_2": "count"}, axis = 1)
-
-            df_group = df_group.reset_index()
-
-            df_group["count"] = df_group["count"].astype(int)
-
-            df_group_pivot = df_group.pivot(index='mu', columns='Freq_bin_2', values='count')
-            
-            df_group_pivot = df_group_pivot.reset_index()
-            
-            df_group_pivot.to_csv(output[0], sep = "\t", index = None)
-            
-rule combine_2_SFS_neutral:
-    input:
-        files = [os.path.join(scratch_dir, "whole_genome/nonsense/2_bins/" + chrom + ".tsv") for chrom in chrom_set]
-    output:
-        os.path.join(KL_data_dir, "whole_genome/neutral/2_bins/all.tsv"),
-    resources:
-        partition="short",
-        runtime="0-12:00",
-        cpus_per_task=5,
-        mem_mb=get_mem_mb
-    run:
-        with Client() as client:
-            
-            df = dd.read_csv(input.files, sep = "\t", dtype={'0.0': 'float64',
-                           '1.0': 'float64', '2.0': 'float64', '3.0': 'float64',
-                           '4.0': 'float64', '5.0': 'float64', '6.0': 'float64',
-                           '7.0': 'float64', '8.0': 'float64', '9.0': 'float64'})
-    
-            df = df.compute()
-            
-            df_group = df.groupby("mu")['0.0', '1.0'].sum().reset_index()
-            
-            df_group = df_group.set_index('mu')
-            sum_list = df_group.sum(axis = 1)
-            df_group = df_group.div(df_group.sum(axis=1), axis=0)
-            df_group["sum"] = sum_list
-            df_group = df_group.reset_index()
-            
-            df_group.to_csv(output[0], sep = "\t", index = None)
