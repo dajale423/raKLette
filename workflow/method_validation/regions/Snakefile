@@ -1,0 +1,77 @@
+## this is to analyze per gene on synonymous, lof, and missense
+
+import sys
+sys.path.insert(0,'/home/djl34/kl_git/scripts')
+from snakefile_imports import *
+
+chrom_set = all_chrom_set
+
+output_dir = "/home/djl34/kl_git/results"
+
+
+##############################################################################################################################   
+
+
+filename_list = [os.path.join(KL_data_dir, "whole_genome/windows/50bp/{chrom}.tsv")]
+
+input_list = [input_filename.format(chrom = chrom) for input_filename in filename_list for chrom in chrom_set]
+
+rule all:
+    input:
+        input_list,
+
+########################################################### processing data ############################################################
+
+rule group_by_sites_and_calculate_zscore:
+    input:
+        rate = os.path.join(KL_data_dir, "whole_genome/phylop/{chrom}/_metadata")
+    output:
+        os.path.join(KL_data_dir, "whole_genome/windows/50bp/{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=1,
+        mem_mb=5000
+    run:
+        with Client() as client:
+            filename = input.rate
+
+            bin_list = [2, 9, "9_reverse_log"]
+            columns_header_list = ["p_{bin_number}", "E[p_{bin_number}]", "Var[p_{bin_number}]"]
+            header_list = [x.format(bin_number = bin_number) for x in columns_header_list for bin_number in bin_list]
+            
+            columns = ["Pos", "mu", "Neutral", "cds", "AF", "Zoonomia_phastcons_primates", "phyloP"]
+            columns.extend(header_list)
+            
+            rate = dd.read_parquet(filename.split("_metadata")[0], columns = columns)
+            rate["Neutral"] = rate["Neutral"].fillna(0)
+            rate["Neutral"] = rate["Neutral"].astype(int)
+            rate["cds"] = rate["cds"].astype(int)
+            rate = rate[~rate["Zoonomia_phastcons_primates"].isna()]
+            rate = rate[~rate["phyloP"].isna()]
+
+            rate["50bp_window"] = rate.Pos//50
+            rate_50bp_window = rate.groupby("50bp_window")
+            rate_50bp_window_sum = rate_50bp_window[["Neutral", "cds"] + header_list].sum().compute()
+            rate_50bp_window_sum["n_sites"] = rate_50bp_window.size().compute()
+            rate_50bp_window_sum["Zoonomia_phastcons_primates_mean"] = rate_50bp_window["Zoonomia_phastcons_primates"].mean().compute()
+            rate_50bp_window_sum["phyloP_mean"] = rate_50bp_window["phyloP"].mean().compute()
+            rate_50bp_window_sum = rate_50bp_window_sum.reset_index()
+
+            def calculate_zscores(rate_sum):
+                #given a rate_sum dataframe, calculate zscores
+                
+                for freq_bin in bin_list:
+                    rate_sum[f"Zscore_{freq_bin}"] = ((rate_sum[f"p_{freq_bin}"] - rate_sum[f"E[p_{freq_bin}]"])/
+                                                                np.sqrt(rate_sum[f"Var[p_{freq_bin}]"]))
+                    if freq_bin == 2:
+                        rate_sum["Zscore_Gnocchi"] = ((rate_sum[f"p_{freq_bin}"] - rate_sum[f"E[p_{freq_bin}]"])/
+                                                                np.sqrt(np.absolute(rate_sum[f"E[p_{freq_bin}]"])))
+
+            calculate_zscores(rate_50bp_window_sum)
+
+            rate_50bp_window_sum.to_csv(output[0], sep = "\t", index = None)
+
+
+
+            
