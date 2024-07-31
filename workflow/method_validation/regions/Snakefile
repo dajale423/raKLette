@@ -12,15 +12,23 @@ output_dir = "/home/djl34/kl_git/results"
 ##############################################################################################################################   
 
 
-filename_list = [os.path.join(KL_data_dir, "whole_genome/windows/50bp/{chrom}.tsv")]
+filename_list = [os.path.join(KL_data_dir, "whole_genome/windows/50bp/{chrom}.tsv"),
+                 # os.path.join(KL_data_dir, "whole_genome/method_validation/50bp/clinvar/{chrom}.tsv"),
+                 # os.path.join(KL_data_dir, "whole_genome/windows/50bp/bed_files/binarized_{chrom}.bed"),
+                 os.path.join(KL_data_dir, "whole_genome/method_validation/50bp/denovo/{chrom}.tsv"),
+                 os.path.join(KL_data_dir, "whole_genome/windows/neutral_10000sites/{chrom}.tsv")]
 
 input_list = [input_filename.format(chrom = chrom) for input_filename in filename_list for chrom in chrom_set]
 
 rule all:
     input:
         input_list,
+        # os.path.join(KL_data_dir, "whole_genome/windows/50bp/bed_files/binarized_all.bed"),
+        # os.path.join(KL_data_dir, "whole_genome/windows/50bp/bed_files/sum_p_all.bed"),
+        # os.path.join(KL_data_dir, "whole_genome/windows/50bp/bed_files/sum_p_reverse_log_all.bed"),
+        # os.path.join(KL_data_dir, "whole_genome/windows/50bp/bed_files/poisson_all.bed")
 
-########################################################### processing data ############################################################
+########################################################### 50bp window ############################################################
 
 rule group_by_sites_and_calculate_zscore:
     input:
@@ -52,7 +60,7 @@ rule group_by_sites_and_calculate_zscore:
 
             rate["50bp_window"] = rate.Pos//50
             rate_50bp_window = rate.groupby("50bp_window")
-            rate_50bp_window_sum = rate_50bp_window[["Neutral", "cds"] + header_list].sum().compute()
+            rate_50bp_window_sum = rate_50bp_window[["Neutral", "cds", "mu"] + header_list].sum().compute()
             rate_50bp_window_sum["n_sites"] = rate_50bp_window.size().compute()
             rate_50bp_window_sum["Zoonomia_phastcons_primates_mean"] = rate_50bp_window["Zoonomia_phastcons_primates"].mean().compute()
             rate_50bp_window_sum["phyloP_mean"] = rate_50bp_window["phyloP"].mean().compute()
@@ -73,5 +81,165 @@ rule group_by_sites_and_calculate_zscore:
             rate_50bp_window_sum.to_csv(output[0], sep = "\t", index = None)
 
 
+rule add_clinvar:
+    input:
+        rate = os.path.join(KL_data_dir, "whole_genome/windows/50bp/{chrom}.tsv"),
+        clinvar = os.path.join(aso_data_dir, "clinvar/clinvar_{chrom}.tsv")
+    output:
+        os.path.join(KL_data_dir, "whole_genome/method_validation/50bp/clinvar/{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-0:10",
+        cpus_per_task=1,
+        mem_mb=5000
+    run:
+        with Client() as client:
+            filename = input.rate
+            windows = pd.read_csv(filename, sep = "\t")
+            windows = windows[windows["n_sites"] > 50]
+            windows = windows[["50bp_window", "Zoonomia_phastcons_primates_mean", "phyloP_mean", "Zscore_2", "Zscore_Gnocchi", 
+                               "Zscore_9", "Zscore_9_reverse_log"]]
+
+            names_list = ['Chrom', 'Pos', 'Allele_ref', 'Allele', 'CLNDN', 'CLNDISDB', 'CLNSIG', 'CLNSIGCONF', 'GENEINFO']
+            clinvar = pd.read_csv(input.clinvar, sep = "\t", names = names_list)
+            clinvar["Pos"] = clinvar["Pos"].astype('Int64')
+
+            clinvar = clinvar[clinvar["CLNSIG"].str.contains("(Pathogenic|Benign)")]
+
+            clinvar["50bp_window"] = clinvar.Pos//50
+            merged_df = clinvar.merge(windows, on = "50bp_window", how = "inner")
+
+            merged_df.to_csv(output[0], sep = "\t", index = None)
+
+rule add_denovo:
+    input:
+        rate = os.path.join(KL_data_dir, "whole_genome/windows/50bp/{chrom}.tsv"),
+        denovo = os.path.join(KL_data_dir, "de_novo/halldorsson_etal/aau1043_datas5_revision1.tsv")
+    output:
+        os.path.join(KL_data_dir, "whole_genome/method_validation/50bp/denovo/{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-0:10",
+        cpus_per_task=1,
+        mem_mb=5000
+    run:
+        filename = input.rate
+        windows = pd.read_csv(filename, sep = "\t")
+        # windows = windows[windows["n_sites"] > 50]
+        windows = windows[["50bp_window", "Neutral", "mu", "n_sites", "Zscore_2", "Zscore_Gnocchi", 
+                           "Zscore_9", "Zscore_9_reverse_log"]]
+
+        denovo = pd.read_csv(input.denovo, sep = "\t", comment = "#")
+        denovo["Pos"] = denovo["Pos"].astype('Int64')
+
+        denovo = denovo[denovo["Chr"] == f"chr{wildcards.chrom}"]
+        denovo = denovo[(denovo["Ref"].str.len() == 1) & (denovo["Alt"].str.len() == 1)]
+        denovo["50bp_window"] = denovo.Pos//50
+        denovo["denovo_an_etal"] = 1
+        
+        merged_df = windows.merge(denovo[["50bp_window", "denovo_an_etal"]], on = "50bp_window", how = "left")
+
+        merged_df.to_csv(output[0], sep = "\t", index = None)
+
+
+rule create_bed_files:
+    input:
+        rate = os.path.join(KL_data_dir, "whole_genome/windows/50bp/{chrom}.tsv")
+    output:
+        os.path.join(KL_data_dir, "whole_genome/windows/50bp/bed_files/binarized_{chrom}.bed"),
+        os.path.join(KL_data_dir, "whole_genome/windows/50bp/bed_files/sum_p_{chrom}.bed"),
+        os.path.join(KL_data_dir, "whole_genome/windows/50bp/bed_files/sum_p_reverse_log_{chrom}.bed"),
+        os.path.join(KL_data_dir, "whole_genome/windows/50bp/bed_files/poisson_{chrom}.bed")
+    resources:
+        partition="short",
+        runtime="0-0:10",
+        cpus_per_task=1,
+        mem_mb=5000
+    run:
+        filename = input.rate
+        windows = pd.read_csv(filename, sep = "\t")
+        windows = windows[windows["n_sites"] > 50]
+
+        windows["Chrom"] = "chr" + wildcards.chrom
+        windows["start"] = windows["50bp_window"] * 50 - 1
+        windows["end"] = (windows["50bp_window"] + 1) * 50 - 1
+        windows["name"] = "."
+
+        bin_list = [2, 9, "9_reverse_log", "Gnocchi"]
+
+        for num in range(len(bin_list)):
+            windows["score"] = windows[f"Zscore_{bin_list[num]}"]
+            windows[["Chrom", "start", "end", "name", "score"]].to_csv(output[num], sep = "\t", index = None, header = None)
+
+rule combine_bed_file:
+    input:
+        bed_files = [os.path.join(KL_data_dir, f"whole_genome/windows/50bp/bed_files/{{header}}_{chrom}.bed") for chrom in all_chrom_set],
+    output:
+        os.path.join(KL_data_dir, "whole_genome/windows/50bp/bed_files/{header}_all.bed"),
+    resources:
+        partition="short",
+        runtime="0-0:10",
+        cpus_per_task=1,
+        mem_mb=10000
+    run:
+        with Client() as client:
+            filename = input.bed_files
+            windows = dd.read_csv(filename, sep = "\t", header=None)
+            windows.to_csv(output[0], sep = "\t", index = None, header = None, single_file = True)
+        
+########################################################### 10000 sites window ############################################################
+rule neutral_10000_sites:
+    input:
+        rate = os.path.join(KL_data_dir, "whole_genome/phylop/{chrom}/_metadata")
+    output:
+        os.path.join(KL_data_dir, "whole_genome/windows/neutral_10000sites/{chrom}.tsv")
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=1,
+        mem_mb=14000
+    run:
+        with Client() as client:
+            filename = input.rate
+
+            # bin_list = [2, 9, "9_reverse_log"]
+            # columns_header_list = ["p_{bin_number}", "E[p_{bin_number}]", "Var[p_{bin_number}]"]
+            # header_list = [x.format(bin_number = bin_number) for x in columns_header_list for bin_number in bin_list]
+            
+            # columns = ["Pos", "mu", "Neutral", "cds", "AF", "Zoonomia_phastcons_primates", "phyloP"]
+            # columns.extend(header_list)
+            
+            rate = dd.read_parquet(filename.split("_metadata")[0])
+            
+            rate_neutral = rate[~rate["Neutral"].isna()].compute()
+            rate_neutral = rate_neutral.reset_index(drop = True)
+
+            n_sites = 10000
+            rate_neutral_groups = rate_neutral.groupby(np.arange(len(rate_neutral.index))//n_sites)
+            
+            bin_list = [2, 9, "9_reverse_log"]
+            
+            columns_header_list = ["p_{bin_number}", "E[p_{bin_number}]", "Var[p_{bin_number}]"]
+            
+            header_list = [x.format(bin_number = bin_number) for x in columns_header_list for bin_number in bin_list]
+            
+            rate_neutral_groups_sum = rate_neutral_groups[header_list].sum()
+            
+            # remove last column, since it has less than 50 sites
+            rate_neutral_groups_sum = pd.DataFrame(rate_neutral_groups_sum).iloc[:-1]
+            
+            for freq_bin in bin_list:
+                rate_neutral_groups_sum[f"Zscore_{freq_bin}"] = ((rate_neutral_groups_sum[f"p_{freq_bin}"] - rate_neutral_groups_sum[f"E[p_{freq_bin}]"])/
+                                                            np.sqrt(rate_neutral_groups_sum[f"Var[p_{freq_bin}]"]))
+            
+            freq_bin = 2
+            rate_neutral_groups_sum["Zscore_Gnocchi"] = ((rate_neutral_groups_sum[f"p_{freq_bin}"] - rate_neutral_groups_sum[f"E[p_{freq_bin}]"])/
+                                                            np.sqrt(np.absolute(rate_neutral_groups_sum[f"E[p_{freq_bin}]"])))
+            
+            rate_neutral_groups_sum["start"] = rate_neutral_groups["Pos"].min()
+            rate_neutral_groups_sum["end"] = rate_neutral_groups["Pos"].max()
+            rate_neutral_groups_sum["n_sites"] = rate_neutral_groups.size()
+
+            rate_neutral_groups_sum.to_csv(output[0], sep = "\t", index = None)
 
             
