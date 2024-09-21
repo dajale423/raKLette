@@ -3,6 +3,8 @@ import os
 import math
 
 import torch
+import torch.nn as nn
+
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -15,6 +17,7 @@ from pyro.nn import PyroModule, PyroParam, PyroSample
 
 import torch.distributions.transforms as transforms
 
+import einops
 from tqdm import tqdm
 import matplotlib
 
@@ -137,11 +140,19 @@ class Linear_first(PyroModule):
     def __init__(self, in_size, out_size, cov_sigma_prior):
         super().__init__()
         self.weight = PyroSample(dist.HalfCauchy(cov_sigma_prior).expand([in_size, out_size]).to_event(1))
-        
+        # self.weight = nn.Parameter(torch.randn(in_size, out_size))
+    
+    def forward(self, input_):
+        return input_ @ self.weight
+
+class Linear(PyroModule):
+    def __init__(self, in_size, out_size):
+        super().__init__()
+        # self.weight = PyroSample(dist.HalfCauchy(cov_sigma_prior).expand([in_size, out_size]).to_event(1))
+        self.weight = nn.Parameter(torch.randn(in_size, out_size))
     def forward(self, input_):
         return input_ @ self.weight
     
-
 class softmax_sfs(PyroModule):
     def __init__(self, beta_neut_full):
         super().__init__()
@@ -166,7 +177,6 @@ class raklette_neuralnet():
         self.fc1 = Linear_first(n_covs, n_bins, cov_sigma_prior)  # set up first FC layer
         self.softmax_sfs = softmax_sfs(beta_neut_full)
         
-
     def model(self, mu_vals, covariates, sample_sfs=None):
         '''
         Run the model for a given dataset, defined by mutation rates, gene_ids, and other covariates
@@ -221,18 +231,23 @@ class raklette_cov():
             The observed binned SFS data we are fitting the model to
 
         '''
-        n_sites = len(mu_vals)
-            
+        n_sites = len(mu_vals)        
         #beta for covariates
-        beta_cov = pyro.sample("beta_cov", dist.HalfCauchy(self.cov_sigma_prior).expand([self.n_covs, self.n_bins]).to_event(1))    
+        beta_cov = pyro.sample("beta_cov", dist.HalfCauchy(self.cov_sigma_prior).expand([self.n_covs, self.n_bins]).to_event(1))
             
         beta_cov_trans = torch.cumsum(beta_cov, dim=-1)
 
         # calculate the multinomial coefficients for each mutation rate
-        mn_sfs = self.beta_neut_full[None,...]
+        mn_sfs = einops.rearrange(beta_neut_full, 'mu_bins freq_bins -> mu_bins 1 freq_bins')
+        # mn_sfs = beta_neut_full[:, None, :]
         
         # convert to probabilities per-site and adjust for covariates
-        sfs = softmax(pad(mn_sfs[..., mu_vals, :] - torch.matmul(covariates, beta_cov_trans)))
+        cov_beta_multiply = einops.einsum(covariate_vals, beta_cov_trans, "sites n_cov, n_cov freq_bins-> sites freq_bins")
+        cov_beta_multiply = einops.rearrange(cov_beta_multiply, 'sites freq_bins -> sites 1 freq_bins')
+        # sfs = softmax(pad(mn_sfs[..., mu_vals, :] - torch.matmul(covariates, beta_cov_trans)))
+        sfs= softmax(pad(mn_sfs[mu_vals, ...] - cov_beta_multiply))
+
+        # print(sfs.shape)
         
         with pyro.plate("sites", n_sites):
             pyro.sample("obs", dist.Categorical(sfs), obs=sample_sfs)
