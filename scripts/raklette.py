@@ -146,10 +146,9 @@ class Linear_first(PyroModule):
         return input_ @ self.weight
 
 class Linear(PyroModule):
-    def __init__(self, in_size, out_size):
+    def __init__(self, in_size, out_size, device):
         super().__init__()
-        # self.weight = PyroSample(dist.HalfCauchy(cov_sigma_prior).expand([in_size, out_size]).to_event(1))
-        self.weight = nn.Parameter(torch.randn(in_size, out_size))
+        self.weight = nn.Parameter(torch.randn((in_size, out_size), device = device))
     def forward(self, input_):
         return input_ @ self.weight
     
@@ -168,13 +167,10 @@ class softmax_sfs(PyroModule):
         
         return sfs
 
-class raklette_neuralnet():
-    def __init__(self, neut_sfs_full, n_bins, n_covs, cov_sigma_prior = torch.tensor(0.1, dtype=torch.float32),
-                 ref_mu_ii=-1):
-
+class raklette_NN_1layer():
+    def __init__(self, neut_sfs_full, n_bins, n_covs, device):
         beta_neut_full = multinomial_trans_torch(neut_sfs_full) #neut_sfs_full is the neutral sfs
-        
-        self.fc1 = Linear_first(n_covs, n_bins, cov_sigma_prior)  # set up first FC layer
+        self.fc1 = Linear(n_covs, n_bins, device)  # set up first FC layer
         self.softmax_sfs = softmax_sfs(beta_neut_full)
         
     def model(self, mu_vals, covariates, sample_sfs=None):
@@ -197,6 +193,71 @@ class raklette_neuralnet():
         
         with pyro.plate("sites", n_sites):
             pyro.sample("obs", dist.Categorical(sfs), obs=sample_sfs)
+
+        return sfs
+
+class raklette_NN_2layer():
+    def __init__(self, neut_sfs_full, n_bins, n_covs, n_hidden, device):
+        beta_neut_full = multinomial_trans_torch(neut_sfs_full) #neut_sfs_full is the neutral sfs
+        self.fc1 = Linear(n_covs, n_hidden, device)  # set up first FC layer
+        self.fc2 = Linear(n_hidden, n_bins, device)  # set up second FC layer
+        self.softmax_sfs = softmax_sfs(beta_neut_full)
+        
+    def model(self, mu_vals, covariates, sample_sfs=None):
+        '''
+        Run the model for a given dataset, defined by mutation rates, gene_ids, and other covariates
+
+        Parameters
+        ----------
+        mu_vals :
+            The mutation rate for each site being analyzed by the model as a 1D array, proportional to per-generation ideally
+        covariates :
+            Matrix of covariates
+        sample_sfs :
+            The observed binned SFS data we are fitting the model to
+        '''
+        n_sites = len(mu_vals)
+            
+        ly1 = self.fc1(covariates)
+        ly2 = self.fc2(ly1)
+        sfs = self.softmax_sfs(mu_vals, ly2)
+        
+        with pyro.plate("sites", n_sites):
+            pyro.sample("obs", dist.Categorical(sfs), obs=sample_sfs)
+
+        return sfs
+            
+class raklette_neuralnet():
+    def __init__(self, neut_sfs_full, n_bins, n_covs, device, cov_sigma_prior = torch.tensor(0.1, dtype=torch.float32)):
+
+        beta_neut_full = multinomial_trans_torch(neut_sfs_full) #neut_sfs_full is the neutral sfs
+        
+        # self.fc1 = Linear_first(n_covs, n_bins, cov_sigma_prior)  # set up first FC layer
+        self.fc1 = Linear(n_covs, n_bins, device)  # set up first FC layer
+        self.softmax_sfs = softmax_sfs(beta_neut_full)
+        
+    def model(self, mu_vals, covariates, sample_sfs=None):
+        '''
+        Run the model for a given dataset, defined by mutation rates, gene_ids, and other covariates
+
+        Parameters
+        ----------
+        mu_vals :
+            The mutation rate for each site being analyzed by the model as a 1D array, proportional to per-generation ideally
+        covariates :
+            Matrix of covariates
+        sample_sfs :
+            The observed binned SFS data we are fitting the model to
+        '''
+        n_sites = len(mu_vals)
+            
+        ly1 = self.fc1(covariates)
+        sfs = self.softmax_sfs(mu_vals, ly1)
+        
+        with pyro.plate("sites", n_sites):
+            pyro.sample("obs", dist.Categorical(sfs), obs=sample_sfs)
+
+        return sfs
 
 ###################################################raklette running using covariates########################################
 class raklette_cov():
