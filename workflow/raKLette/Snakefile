@@ -1,0 +1,167 @@
+## This is a snakemake to run raKLette
+## I am making two different dataframes one will contain the features, the other will contain population sequencing data
+
+import sys
+sys.path.insert(0,'/home/djl34/kl_git/scripts')
+from snakefile_imports import *
+
+import torch
+import pyro
+import pyro.distributions as dist
+import pyro.distributions.constraints as constraints
+from pyro.nn import PyroModule
+from tqdm import tqdm
+from torch.utils.data import Dataset, DataLoader
+
+sys.path.insert(0, '/home/djl34/lab_pd/kl/git/KL/scripts')
+import raklette
+from run_raklette import run_raklette
+# from run_raklette import run_raklette_cov
+from run_raklette import TSVDataset
+
+sys.path.insert(0, '/home/djl34/lab_pd/simulator/code')
+from others import round_sig
+
+def get_mem_mb(wildcards, attempt):
+    return attempt * 25000
+
+include: "/home/djl34/kl_git/scripts/Snakefile"
+
+
+###################################################################################################################
+chrom_set = all_chrom_set
+even_chrom_set = all_chrom_set
+# chrom_set = ["22"]
+
+file_directory = "phylop/"
+
+###################################################################################################################
+
+wildcard_constraints:
+    chrom="[-+]?\d+",
+    epoch="\d+",
+    interval_min="[+-]?([0-9]*[.])?[0-9]+",
+    interval_max="[+-]?([0-9]*[.])?[0-9]+",
+    samplesize="\d+",
+
+rule all:
+    input:
+        [os.path.join(scratch_dir, "kl_input/" + f"{file_directory}/50bp_leave_out_phastcons_primates_chr_{chrom}.tsv") for chrom in chrom_set],
+        [os.path.join(scratch_dir, "kl_input/"+ f"{file_directory}/50bp_leave_out_phastcons_primates_chr_{chrom}_chunk_1000000_0.tsv") for chrom in chrom_set],
+        
+########################################## getting column of interest ##############################################
+
+rule make_tsv_file_phastcons:
+    input:
+        os.path.join(KL_data_dir, "whole_genome/phylop/{chrom}/_metadata"),
+        os.path.join(KL_data_dir, "whole_genome/windows/50bp/{chrom}.tsv")
+    output:
+        os.path.join(scratch_dir, f"kl_input/{file_directory}phastcons_primates_chr_{{chrom}}.tsv")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=1,
+        mem_mb=6000
+    run:
+        with Client() as client:
+
+            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+
+            rate["50bp_window"] = rate.Pos//50
+
+            window = pd.read_csv(input[1], sep = "\t")
+            window["50bp_window"] = window["50bp_window"].astype("Int64")
+            rate = rate.merge(window[["50bp_window", "Zscore_9"]], on = ["50bp_window"], how = "left")
+            include_columns = ["mu_index", "Freq_bin_9", "Zoonomia_phastcons_primates", "Zscore_9"]
+            rate = rate[include_columns]
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+
+
+## leave out the site for calculating sum_p
+rule make_tsv_file_phastcons_leave_out:
+    input:
+        os.path.join(KL_data_dir, "whole_genome/phylop/{chrom}/_metadata"),
+        os.path.join(KL_data_dir, "whole_genome/windows/50bp/{chrom}.tsv")
+    output:
+        os.path.join(scratch_dir, f"kl_input/{file_directory}/50bp_leave_out_phastcons_primates_chr_{{chrom}}.tsv")
+    resources:
+        partition="short",
+        runtime="0-1:00",
+        cpus_per_task=2,
+        mem_mb=12000
+    run:
+        with Client() as client:
+
+            rate = dd.read_parquet("/".join(input[0].split("/")[:-1]) + "/")
+
+            rate["50bp_window"] = rate.Pos//50
+
+            window = pd.read_csv(input[1], sep = "\t")
+            window["50bp_window"] = window["50bp_window"].astype("Int64")
+
+            window = window.rename({"p_9": "p_9_window", "E[p_9]" : "E[p_9]_window", "Var[p_9]": "Var[p_9]_window"}, axis = 1)
+            
+            rate = rate.merge(window[["50bp_window", "p_9_window", "E[p_9]_window", "Var[p_9]_window"]], on = ["50bp_window"], how = "left")
+            
+            for i in ["p_9", "E[p_9]", "Var[p_9]"]:
+                rate[f"{i}_window"] = rate[f"{i}_window"] - rate[f"{i}"]
+            rate["Zscore_9_window"] = ((rate["p_9_window"] - rate["E[p_9]_window"])/np.sqrt(rate["Var[p_9]_window"]))
+            
+            include_columns = ["mu_index", "Freq_bin_9", "Zoonomia_phastcons_primates", "Zscore_9_window"]
+            
+            rate = rate[include_columns]
+            rate.to_csv(output[0], sep = "\t", index = None, single_file = True)
+            
+                
+########################################## For running KL analysis #####################################
+        
+rule run_KL_cov:
+    input:
+        variants = os.path.join(scratch_dir, "kl_input/" + file_directory + "{header}.tsv"),
+        length_file = os.path.join(scratch_dir, "kl_input/" + file_directory +"{header}_length.tsv"),
+        neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all.tsv",
+#         neutral_sfs = KL_data_dir + "/whole_genome/neutral/5_bins/all_original.tsv"
+    output:
+        os.path.join(KL_data_dir, "raklette_output/"+ file_directory +"{header}_covonly_lr_{learning_rate}_gamma_{gamma}_chunksize_{chunksize}_epoch_{epoch}_covprior_{cov_prior}.pkl")
+    resources:
+        partition="short",
+        runtime="0-12:00",
+        cpus_per_task=5,
+        mem_mb=20000
+    run:
+        n_covs = 1
+        
+        input_filename = input.variants
+        output_filename = output[0]
+        neutral_sfs_filename = input.neutral_sfs
+        
+        
+        df = pd.read_csv(input.length_file, sep = "\t", header = None)
+        nb_samples = df[0][0]
+        nb_features = df[0][1] - 2
+        
+        print("number of samples: " + str(nb_samples))
+        
+        if nb_samples == 0:
+            f = open(output_filename, "w")
+            f.write("no sample")
+            f.close()
+        else:        
+            with open(input.variants) as f:
+                first_line = f.readline()
+            header = first_line.split("\t")
+            
+            chunksize = int(wildcards.chunksize)
+
+            print("number of chunks " + str(nb_samples/chunksize))
+
+            dataset = TSVDataset(input_filename, chunksize=chunksize, nb_samples = nb_samples, header_all = header, features = header)
+            loader = DataLoader(dataset, batch_size=1, num_workers=1, shuffle=False)
+
+            num_epochs = int(wildcards.epoch)
+            cov_prior = float(wildcards.cov_prior)
+            
+            #lets run raklette
+            run_raklette_cov(loader, nb_features, num_epochs, neutral_sfs_filename, output_filename, 
+                         float(wildcards.learning_rate), float(wildcards.gamma), 
+                             cov_sigma_prior = torch.tensor(cov_prior, dtype=torch.float32))
