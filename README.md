@@ -5,4 +5,4 @@ raKLette is a method to infer negative selection from population sequencing data
 * `preprocessing`: workflow to pre-process data before analyzing them.
 * `scripts`: contains various scripts, including those for machine learning and statistical analyses.
 * `envs`: includes conda environments used to run code.
-* `notebook` directory is for various plotting.
+* `notebook` directory contains jupyter notebooks used to generate various plots.
